@@ -1,0 +1,541 @@
+<mujoco model="corridor_3x100">
+  <compiler angle="degree" autolimits="true"/>
+  <option timestep="0.005" gravity="0 0 -9.81"/>
+  <size njmax="4000" nconmax="1000"/>
+<asset>
+    <texture name="tex_grid" type="2d" builtin="checker" 
+             rgb1="0.1 0.1 0.1" rgb2="0.15 0.15 0.15" 
+             width="300" height="300" 
+             mark="edge" markrgb="0.8 0.8 0.8"/>
+    
+    <texture name="tex_wall" type="2d" builtin="checker"
+             rgb1="0.5 0.5 0.5" rgb2="0.55 0.55 0.55"
+             width="300" height="300"/>
+
+    <material name="mat_floor" texture="tex_grid" 
+              texrepeat="2 2" specular="0.1" shininess="0.1"/>
+              
+    <material name="mat_wall" texture="tex_wall" 
+              texrepeat="1 1" rgba="0.5 0.5 0.5 0" specular="0.3" shininess="0.3"/>
+              
+    <material name="mat_bump" texture="tex_wall" rgba="0.5 0.5 0.5 1" 
+              specular="0.3" shininess="0.3"/>
+  </asset>
+  <worldbody>
+<light name="key_light" 
+       pos="4 4 4" 
+       dir="-1 -1 -1" 
+       directional="true" 
+       diffuse="1.1 1.1 1.1"  specular="0.4 0.4 0.4"  castshadow="true" />
+
+<light name="fill_light" 
+       pos="-6 4 2" 
+       dir="1 -0.5 -1" 
+       directional="true" 
+       ambient="0.4 0.4 0.4"   diffuse="0.6 0.6 0.6"   specular="0.2 0.2 0.2"
+       castshadow="false" />
+
+    <geom name="wall_left" type="box" size="50.000 0.025 4.000" pos="50.000 -1.525 4.000" material="mat_wall"/>
+    <geom name="wall_right" type="box" size="50.000 0.025 4.000" pos="50.000 1.525 4.000" material="mat_wall"/>
+    <geom 
+    name="geom_ramp1_1" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="4 1 0.15" 
+    euler="0 -15 0" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp1_2" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="5 1 0.3" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp1_3" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="6 1 0.15" 
+    euler="0 15 0" 
+    material="mat_bump"
+    />
+
+    <geom 
+    name="geom_ramp2_1" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="11 -1 0.15" 
+    euler="0 -15 0" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp2_2" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="12 -1 0.3" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp2_3" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="13 -1 0.15" 
+    euler="0 15 0" 
+    material="mat_bump"
+    />
+
+    <geom 
+    name="geom_ramp3_1" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="19 1 0.15" 
+    euler="0 -15 0" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp3_2" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="20 1 0.3" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp3_3" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="21 1 0.15" 
+    euler="0 15 0" 
+    material="mat_bump"
+    />
+
+    <geom 
+    name="geom_ramp4_1" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="27 1 0.15" 
+    euler="0 -15 0" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp4_2" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="28 1 0.3" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp4_3" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="29 1 0.15" 
+    euler="0 15 0" 
+    material="mat_bump"
+    />
+  
+    <geom 
+    name="geom_ramp5_1" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="35 1 0.15" 
+    euler="0 -15 0" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp5_2" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="36 1 0.3" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp5_3" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="37 1 0.15" 
+    euler="0 15 0" 
+    material="mat_bump"
+    />
+
+    <geom 
+    name="geom_ramp6_1" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="43 -1 0.15" 
+    euler="0 -15 0" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp6_2" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="44 -1 0.3" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp6_3" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="45 -1 0.15" 
+    euler="0 15 0" 
+    material="mat_bump"
+    />
+
+    <geom 
+    name="geom_ramp7_1" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="51 1 0.15" 
+    euler="0 -15 0" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp7_2" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="52 1 0.3" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp7_3" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="53 1 0.15" 
+    euler="0 15 0" 
+    material="mat_bump"
+    />
+
+    <geom 
+    name="geom_ramp8_1" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="59 -1 0.15" 
+    euler="0 -15 0" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp8_2" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="60 -1 0.3" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp8_3" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="61 -1 0.15" 
+    euler="0 15 0" 
+    material="mat_bump"
+    />
+
+    <geom 
+    name="geom_ramp9_1" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="75 1 0.15" 
+    euler="0 -15 0" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp9_2" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="76 1 0.3" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp9_3" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="77 1 0.15" 
+    euler="0 15 0" 
+    material="mat_bump"
+    />
+
+    <geom 
+    name="geom_ramp10_1" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="91 -1 0.15" 
+    euler="0 -15 0" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp10_2" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="92 -1 0.3" 
+    material="mat_bump"
+    />
+    <geom 
+    name="geom_ramp10_3" 
+    type="box" 
+    size="0.5 0.5 0.025" 
+    pos="93 -1 0.15" 
+    euler="0 15 0" 
+    material="mat_bump"
+    />
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="0.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="0.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="1.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="1.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="2.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="2.250 -1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="2.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="3.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="3.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="3.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="4.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="5.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="5.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="5.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.150 0.025" pos="6.250 -1.350 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.050 0.025" pos="6.250 0.450 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="6.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="7.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="7.250 1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="7.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="8.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 1.500 0.040" pos="8.250 0.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="8.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="9.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="9.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="9.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.600 0.025" pos="10.250 -0.900 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.600 0.025" pos="10.250 0.900 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="10.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="11.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="11.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="11.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="12.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="13.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="13.250 -1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="13.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.050 0.025" pos="14.250 -0.450 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.150 0.025" pos="14.250 1.350 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="14.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="15.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="15.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="15.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="16.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="16.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="17.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="17.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="17.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.150 0.025" pos="18.250 -1.350 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.050 0.025" pos="18.250 0.450 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="18.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="19.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="19.250 1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="19.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="20.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="21.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="21.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="21.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.600 0.025" pos="22.250 -0.900 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.600 0.025" pos="22.250 0.900 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="22.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="23.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="23.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="23.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="24.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 1.500 0.040" pos="24.250 0.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="24.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="25.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="25.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.050 0.025" pos="26.250 -0.450 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.150 0.025" pos="26.250 1.350 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="26.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="27.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="27.250 -1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="27.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="28.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="29.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="29.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="29.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="30.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="30.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="31.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="31.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="31.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="32.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="32.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="33.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="33.250 1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="33.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.150 0.025" pos="34.250 -1.350 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.050 0.025" pos="34.250 0.450 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="34.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="35.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="35.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="35.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="36.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="37.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="37.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="37.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.600 0.025" pos="38.250 -0.900 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.600 0.025" pos="38.250 0.900 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="38.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="39.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="39.250 -1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="39.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="40.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 1.500 0.040" pos="40.250 0.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="40.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="41.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="41.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="41.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.050 0.025" pos="42.250 -0.450 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.150 0.025" pos="42.250 1.350 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="42.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="43.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="43.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="43.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="44.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="45.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="45.250 1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="45.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="46.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="46.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="47.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="47.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="47.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="48.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="48.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="49.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="49.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="49.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.150 0.025" pos="50.250 -1.350 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.050 0.025" pos="50.250 0.450 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="50.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="51.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="51.250 -1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="51.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="52.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="52.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="53.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="53.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="53.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.600 0.025" pos="54.250 -0.900 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.600 0.025" pos="54.250 0.900 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="54.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="55.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="55.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="55.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="56.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 1.500 0.040" pos="56.250 0.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="56.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="57.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="57.250 1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="57.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.050 0.025" pos="58.250 -0.450 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.150 0.025" pos="58.250 1.350 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="58.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="59.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="59.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="59.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="60.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="61.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="61.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="61.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="62.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="62.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="63.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="63.250 -1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="63.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="64.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="64.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="65.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="65.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="65.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="66.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="66.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="67.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="67.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="67.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="68.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="68.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="69.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="69.250 1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="69.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.150 0.025" pos="70.250 -1.350 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.050 0.025" pos="70.250 0.450 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="70.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="71.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="71.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="71.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="72.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 1.500 0.040" pos="72.250 0.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="72.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="73.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="73.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="73.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.600 0.025" pos="74.250 -0.900 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.600 0.025" pos="74.250 0.900 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="74.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="75.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="75.250 -1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="75.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="76.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="77.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="77.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="77.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="78.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="78.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="79.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="79.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="79.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="80.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="80.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="81.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="81.250 1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="81.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="82.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="82.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="83.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="83.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="83.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="84.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 1.500 0.040" pos="84.250 0.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="84.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="85.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="85.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="85.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="86.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="86.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="87.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="87.250 -1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="87.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.050 0.025" pos="88.250 -0.450 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 0.150 0.025" pos="88.250 1.350 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="88.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="89.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="89.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="89.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="90.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="90.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="91.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="91.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="91.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="92.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="93.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="93.250 1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="93.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="94.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="94.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="95.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="95.250 0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="95.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="96.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="96.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="97.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="97.250 -0.400 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="97.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="98.250 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="98.750 0.000 0.025"/>
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="99.250 0.000 0.025"/>
+    <!-- <geom type="box" material="mat_bump" size="0.250 0.300 0.040" pos="99.250 -1.000 0.065"/> -->
+    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="99.750 0.000 0.025"/>
+  </worldbody>
+</mujoco>

@@ -1,0 +1,49 @@
+# Training outputs (keep models for sharing)
+runs/
+videos/
+# models/  # Commented out - we want to version trained models
+# *.pth    # Commented out - we want to version trained models
+*.pt
+*.ckpt
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+venv/
+env/
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb-checkpoint.json
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+events.out.tfevents.*
+share.txt
+
+# Temporary files
+*.tmp
+*.bak
+*~
+
+# MuJoCo compiled files
+*.so
+*.dylib
+*.dll

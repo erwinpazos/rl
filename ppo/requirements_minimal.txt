@@ -1,0 +1,12 @@
+# Minimal requirements (without tyro and tensorboard)
+
+# Core RL libraries
+gymnasium>=0.29.0
+torch>=2.0.0
+numpy>=1.24.0
+
+# MuJoCo physics
+mujoco>=3.0.0
+
+# Visualization only (optional)
+matplotlib>=3.7.0

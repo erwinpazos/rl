@@ -1,0 +1,19 @@
+# PPO Training Requirements for Robot Corridor
+
+# Core RL libraries
+gymnasium>=0.29.0
+torch>=2.0.0
+numpy>=1.24.0
+
+# MuJoCo physics
+mujoco>=3.0.0
+
+# Logging and visualization
+tensorboard>=2.14.0
+matplotlib>=3.7.0
+
+# CLI argument parsing
+tyro>=0.5.0
+
+# Optional: Weights & Biases tracking
+# wandb>=0.15.0
