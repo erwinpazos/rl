@@ -49,16 +49,16 @@ class RobotCorridorEnv(gym.Env):
         self.render_mode = render_mode
         
         # Floor observation parameters (from notebook Question 7)
-        self.n_rows_ahead = 2      # Look 2 rows ahead
+        self.n_rows_ahead = 4      # Look 4 rows ahead (2m) for better anticipation
         self.n_rows_behind = 1     # Look 1 row behind
         self.n_cols = 6            # 6 cells per row (3m / 0.5m)
-        self.n_observation_rows = self.n_rows_behind + 1 + self.n_rows_ahead  # 4 rows
+        self.n_observation_rows = self.n_rows_behind + 1 + self.n_rows_ahead  # 6 rows
         
         # Build cell map after model is loaded
         self.cell_map_semantic = self._build_cell_map()
         
-        # Observation space: [x, y, z, vx, vy, vz] + floor grid (4 rows × 6 cols = 24 cells)
-        # Total: 6 + 24 = 30 values
+        # Observation space: [x, y, z, vx, vy, vz] + floor grid (6 rows × 6 cols = 36 cells)
+        # Total: 6 + 36 = 42 values
         obs_size = 6 + (self.n_observation_rows * self.n_cols)
         self.observation_space = spaces.Box(
             low=-10.0,
@@ -155,7 +155,7 @@ class RobotCorridorEnv(gym.Env):
         - 1 = bump  
         - 2 = hole
         
-        Shape: (n_rows_behind + 1 + n_rows_ahead, n_cols) = (4, 6)
+        Shape: (n_rows_behind + 1 + n_rows_ahead, n_cols) = (6, 6)
         """
         # Calculate robot's cell position
         robot_row = int(robot_x / self.cell_width)
@@ -190,10 +190,10 @@ class RobotCorridorEnv(gym.Env):
         n_y = self.n_cols  # 6 columns
         half_width = self.corridor_width / 2.0
         
-        # Initialize all cells as flat (0)
+        # Initialize all cells as holes (2) - zones without geometry are holes
         for r in range(n_x):
             for c in range(n_y):
-                cell_map[(r, c)] = 0
+                cell_map[(r, c)] = 2  # hole by default
         
         # Helper functions
         def idx_to_p(ix, iy):
@@ -214,11 +214,11 @@ class RobotCorridorEnv(gym.Env):
         def get_cell_type_from_name(name):
             name_lower = name.lower()
             if 'bump' in name_lower or 'ramp' in name_lower:
-                return 1  # bump
-            elif 'hole' in name_lower:
-                return 2  # hole
+                return 1  # bump (bridge/ramp)
+            elif 'flat' in name_lower or 'floor' in name_lower:
+                return 0  # flat (ground)
             else:
-                return 0  # flat
+                return 0  # default to flat if geometry exists
         
         # Store geometries with their Z height for prioritization
         # Higher geometries (bridges) should override lower ones (ground)

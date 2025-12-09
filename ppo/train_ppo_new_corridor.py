@@ -23,9 +23,9 @@ class Config:
     seed = 1
     
     # Training
-    total_timesteps = 2500000  # Faster training for testing
+    total_timesteps = 8000000  # Faster training for testing
     learning_rate = 3e-4
-    num_envs = 24  # Optimized for 32 CPU cores
+    num_envs = 28  # Optimized for 32 CPU cores
     num_steps = 2048
     gamma = 0.99
     gae_lambda = 0.95
