@@ -21,45 +21,45 @@
 
     <geom name="wall_left" type="box" size="50.000 0.025 4.000" pos="50.000 -1.525 4.000" material="mat_wall" />
     <geom name="wall_right" type="box" size="50.000 0.025 4.000" pos="50.000 1.525 4.000" material="mat_wall" />
-    <geom name="bump_0" type="box" size="0.5 0.5 0.025" pos="4 1 0.15" euler="0 -15 0" material="mat_bump" />
-    <geom name="bump_1" type="box" size="0.5 0.5 0.025" pos="5 1 0.3" material="mat_bump" />
-    <geom name="bump_2" type="box" size="0.5 0.5 0.025" pos="6 1 0.15" euler="0 15 0" material="mat_bump" />
+    <geom name="ramp_0" type="box" size="0.5 0.5 0.025" pos="4 0 0.15" euler="0 -15 0" material="mat_bump" />
+    <geom name="ramp_1" type="box" size="0.5 0.5 0.025" pos="5 0 0.3" material="mat_bump" />
+    <geom name="ramp_2" type="box" size="0.5 0.5 0.025" pos="6 0 0.15" euler="0 15 0" material="mat_bump" />
 
-    <geom name="bump_3" type="box" size="0.5 0.5 0.025" pos="11 -1 0.15" euler="0 -15 0" material="mat_bump" />
-    <geom name="bump_4" type="box" size="0.5 0.5 0.025" pos="12 -1 0.3" material="mat_bump" />
-    <geom name="bump_5" type="box" size="0.5 0.5 0.025" pos="13 -1 0.15" euler="0 15 0" material="mat_bump" />
+    <geom name="ramp_3" type="box" size="0.5 0.5 0.025" pos="11 -1 0.15" euler="0 -15 0" material="mat_bump" />
+    <geom name="ramp_4" type="box" size="0.5 0.5 0.025" pos="12 -1 0.3" material="mat_bump" />
+    <geom name="ramp_5" type="box" size="0.5 0.5 0.025" pos="13 -1 0.15" euler="0 15 0" material="mat_bump" />
 
-    <geom name="bump_6" type="box" size="0.5 0.5 0.025" pos="19 1 0.15" euler="0 -15 0" material="mat_bump" />
-    <geom name="bump_7" type="box" size="0.5 0.5 0.025" pos="20 1 0.3" material="mat_bump" />
-    <geom name="bump_8" type="box" size="0.5 0.5 0.025" pos="21 1 0.15" euler="0 15 0" material="mat_bump" />
+    <geom name="ramp_6" type="box" size="0.5 0.5 0.025" pos="19 1 0.15" euler="0 -15 0" material="mat_bump" />
+    <geom name="ramp_7" type="box" size="0.5 0.5 0.025" pos="20 1 0.3" material="mat_bump" />
+    <geom name="ramp_8" type="box" size="0.5 0.5 0.025" pos="21 1 0.15" euler="0 15 0" material="mat_bump" />
 
-    <geom name="bump_9" type="box" size="0.5 0.5 0.025" pos="27 1 0.15" euler="0 -15 0" material="mat_bump" />
-    <geom name="bump_10" type="box" size="0.5 0.5 0.025" pos="28 1 0.3" material="mat_bump" />
-    <geom name="bump_11" type="box" size="0.5 0.5 0.025" pos="29 1 0.15" euler="0 15 0" material="mat_bump" />
+    <geom name="ramp_9" type="box" size="0.5 0.5 0.025" pos="27 1 0.15" euler="0 -15 0" material="mat_bump" />
+    <geom name="ramp_10" type="box" size="0.5 0.5 0.025" pos="28 1 0.3" material="mat_bump" />
+    <geom name="ramp_11" type="box" size="0.5 0.5 0.025" pos="29 1 0.15" euler="0 15 0" material="mat_bump" />
   
-    <geom name="bump_12" type="box" size="0.5 0.5 0.025" pos="35 1 0.15" euler="0 -15 0" material="mat_bump" />
-    <geom name="bump_13" type="box" size="0.5 0.5 0.025" pos="36 1 0.3" material="mat_bump" />
-    <geom name="bump_14" type="box" size="0.5 0.5 0.025" pos="37 1 0.15" euler="0 15 0" material="mat_bump" />
+    <geom name="ramp_12" type="box" size="0.5 0.5 0.025" pos="35 1 0.15" euler="0 -15 0" material="mat_bump" />
+    <geom name="ramp_13" type="box" size="0.5 0.5 0.025" pos="36 1 0.3" material="mat_bump" />
+    <geom name="ramp_14" type="box" size="0.5 0.5 0.025" pos="37 1 0.15" euler="0 15 0" material="mat_bump" />
 
-    <geom name="bump_15" type="box" size="0.5 0.5 0.025" pos="43 -1 0.15" euler="0 -15 0" material="mat_bump" />
-    <geom name="bump_16" type="box" size="0.5 0.5 0.025" pos="44 -1 0.3" material="mat_bump" />
-    <geom name="bump_17" type="box" size="0.5 0.5 0.025" pos="45 -1 0.15" euler="0 15 0" material="mat_bump" />
+    <geom name="ramp_15" type="box" size="0.5 0.5 0.025" pos="43 -1 0.15" euler="0 -15 0" material="mat_bump" />
+    <geom name="ramp_16" type="box" size="0.5 0.5 0.025" pos="44 -1 0.3" material="mat_bump" />
+    <geom name="ramp_17" type="box" size="0.5 0.5 0.025" pos="45 -1 0.15" euler="0 15 0" material="mat_bump" />
 
-    <geom name="bump_18" type="box" size="0.5 0.5 0.025" pos="51 1 0.15" euler="0 -15 0" material="mat_bump" />
-    <geom name="bump_19" type="box" size="0.5 0.5 0.025" pos="52 1 0.3" material="mat_bump" />
-    <geom name="bump_20" type="box" size="0.5 0.5 0.025" pos="53 1 0.15" euler="0 15 0" material="mat_bump" />
+    <geom name="ramp_18" type="box" size="0.5 0.5 0.025" pos="51 1 0.15" euler="0 -15 0" material="mat_bump" />
+    <geom name="ramp_19" type="box" size="0.5 0.5 0.025" pos="52 1 0.3" material="mat_bump" />
+    <geom name="ramp_20" type="box" size="0.5 0.5 0.025" pos="53 1 0.15" euler="0 15 0" material="mat_bump" />
 
-    <geom name="bump_21" type="box" size="0.5 0.5 0.025" pos="59 -1 0.15" euler="0 -15 0" material="mat_bump" />
-    <geom name="bump_22" type="box" size="0.5 0.5 0.025" pos="60 -1 0.3" material="mat_bump" />
-    <geom name="bump_23" type="box" size="0.5 0.5 0.025" pos="61 -1 0.15" euler="0 15 0" material="mat_bump" />
+    <geom name="ramp_21" type="box" size="0.5 0.5 0.025" pos="59 -1 0.15" euler="0 -15 0" material="mat_bump" />
+    <geom name="ramp_22" type="box" size="0.5 0.5 0.025" pos="60 -1 0.3" material="mat_bump" />
+    <geom name="ramp_23" type="box" size="0.5 0.5 0.025" pos="61 -1 0.15" euler="0 15 0" material="mat_bump" />
 
-    <geom name="bump_24" type="box" size="0.5 0.5 0.025" pos="75 1 0.15" euler="0 -15 0" material="mat_bump" />
-    <geom name="bump_25" type="box" size="0.5 0.5 0.025" pos="76 1 0.3" material="mat_bump" />
-    <geom name="bump_26" type="box" size="0.5 0.5 0.025" pos="77 1 0.15" euler="0 15 0" material="mat_bump" />
+    <geom name="ramp_24" type="box" size="0.5 0.5 0.025" pos="75 1 0.15" euler="0 -15 0" material="mat_bump" />
+    <geom name="ramp_25" type="box" size="0.5 0.5 0.025" pos="76 1 0.3" material="mat_bump" />
+    <geom name="ramp_26" type="box" size="0.5 0.5 0.025" pos="77 1 0.15" euler="0 15 0" material="mat_bump" />
 
-    <geom name="bump_27" type="box" size="0.5 0.5 0.025" pos="91 -1 0.15" euler="0 -15 0" material="mat_bump" />
-    <geom name="bump_28" type="box" size="0.5 0.5 0.025" pos="92 -1 0.3" material="mat_bump" />
-    <geom name="bump_29" type="box" size="0.5 0.5 0.025" pos="93 -1 0.15" euler="0 15 0" material="mat_bump" />
+    <geom name="ramp_27" type="box" size="0.5 0.5 0.025" pos="91 -1 0.15" euler="0 -15 0" material="mat_bump" />
+    <geom name="ramp_28" type="box" size="0.5 0.5 0.025" pos="92 -1 0.3" material="mat_bump" />
+    <geom name="ramp_29" type="box" size="0.5 0.5 0.025" pos="93 -1 0.15" euler="0 15 0" material="mat_bump" />
     <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="0.250 0.000 0.025" name="flat_0" />
     <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="0.750 0.000 0.025" name="flat_1" />
     <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="1.250 0.000 0.025" name="flat_2" />

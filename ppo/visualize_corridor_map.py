@@ -24,7 +24,7 @@ def visualize_full_corridor():
     print(f"Total length: {(max_row+1) * env.cell_width}m")
     print(f"Total width: {(max_col+1) * env.cell_width}m")
     print()
-    print("Legend: . = flat (0)  # = bump (1)  X = hole (2)")
+    print("Legend: . = flat (0)  / = ramp (1)  X = hole (2)  # = bump (3)")
     print("="*80)
     print()
     
@@ -36,9 +36,11 @@ def visualize_full_corridor():
             if cell_type == 0:
                 line += "."
             elif cell_type == 1:
-                line += "#"
+                line += "/"  # ramp
             elif cell_type == 2:
-                line += "X"
+                line += "X"  # hole
+            elif cell_type == 3:
+                line += "#"  # bump
             else:
                 line += "?"
         print(line)
@@ -49,14 +51,16 @@ def visualize_full_corridor():
     # Statistics
     total_cells = (max_row + 1) * (max_col + 1)
     flat_count = sum(1 for v in cell_map.values() if v == 0)
-    bump_count = sum(1 for v in cell_map.values() if v == 1)
+    ramp_count = sum(1 for v in cell_map.values() if v == 1)
     hole_count = sum(1 for v in cell_map.values() if v == 2)
+    bump_count = sum(1 for v in cell_map.values() if v == 3)
     
     print("STATISTICS:")
     print(f"  Total cells: {total_cells}")
     print(f"  Flat cells:  {flat_count} ({100*flat_count/total_cells:.1f}%)")
-    print(f"  Bump cells:  {bump_count} ({100*bump_count/total_cells:.1f}%)")
+    print(f"  Ramp cells:  {ramp_count} ({100*ramp_count/total_cells:.1f}%)")
     print(f"  Hole cells:  {hole_count} ({100*hole_count/total_cells:.1f}%)")
+    print(f"  Bump cells:  {bump_count} ({100*bump_count/total_cells:.1f}%)")
     print("="*80)
     
     env.close()

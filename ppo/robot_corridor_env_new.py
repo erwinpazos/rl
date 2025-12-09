@@ -152,8 +152,9 @@ class RobotCorridorEnv(gym.Env):
         
         Returns a grid of cell types:
         - 0 = flat
-        - 1 = bump  
+        - 1 = ramp (bridge/slope)
         - 2 = hole
+        - 3 = bump (obstacle)
         
         Shape: (n_rows_behind + 1 + n_rows_ahead, n_cols) = (6, 6)
         """
@@ -213,8 +214,10 @@ class RobotCorridorEnv(gym.Env):
         
         def get_cell_type_from_name(name):
             name_lower = name.lower()
-            if 'bump' in name_lower or 'ramp' in name_lower:
-                return 1  # bump (bridge/ramp)
+            if 'ramp' in name_lower:
+                return 1  # ramp (bridge/slope)
+            elif 'bump' in name_lower:
+                return 3  # bump (obstacle)
             elif 'flat' in name_lower or 'floor' in name_lower:
                 return 0  # flat (ground)
             else:
@@ -294,11 +297,24 @@ class RobotCorridorEnv(gym.Env):
             # Progress reward: encourage forward movement
             delta_x = robot_x - self.previous_x
             self.previous_x = robot_x
-            reward = delta_x * 10.0  # Scale reward
             
-            # Penalty for being stuck (low forward velocity)
+            # Check if on a ramp
+            robot_row = int(robot_x / self.cell_width)
+            robot_col = int((robot_y + self.corridor_width/2) / self.cell_width)
+            cell_type = self.cell_map_semantic.get((robot_row, robot_col), 2)
+            
+            # DOUBLE progress reward when on ramp to encourage CROSSING it
+            if cell_type == 1:  # On a ramp
+                reward = delta_x * 20.0  # 2x progress reward - encourages crossing fast
+            else:
+                reward = delta_x * 10.0  # Normal progress reward
+            
+            # Penalty for being stuck (stronger on ramps)
             if abs(robot_vx) < 0.1:  # If moving very slowly
-                reward -= 0.5  # Strong penalty for being stuck
+                if cell_type == 1:  # Stuck on ramp is worse
+                    reward -= 2.0  # Strong penalty - don't stay on ramp!
+                else:
+                    reward -= 0.5  # Normal stuck penalty
             
             # Small penalty for time (encourage efficiency)
             reward -= 0.01
