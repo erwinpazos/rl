@@ -45,20 +45,20 @@ class RobotCorridorEnv(gym.Env):
         self.max_steps = max_steps
         self.corridor_length = 100.0
         self.corridor_width = 3.0
-        self.cell_width = 0.5
+        self.cell_width = 0.25  # Smaller cells for higher resolution
         self.render_mode = render_mode
         
         # Floor observation parameters (from notebook Question 7)
-        self.n_rows_ahead = 4      # Look 4 rows ahead (2m) for better anticipation
+        self.n_rows_ahead = 8      # Look 8 rows ahead (2m with 0.25m cells)
         self.n_rows_behind = 1     # Look 1 row behind
-        self.n_cols = 6            # 6 cells per row (3m / 0.5m)
-        self.n_observation_rows = self.n_rows_behind + 1 + self.n_rows_ahead  # 6 rows
+        self.n_cols = 12           # 12 cells per row (3m / 0.25m)
+        self.n_observation_rows = self.n_rows_behind + 1 + self.n_rows_ahead  # 10 rows
         
         # Build cell map after model is loaded
         self.cell_map_semantic = self._build_cell_map()
         
-        # Observation space: [x, y, z, vx, vy, vz] + floor grid (6 rows × 6 cols = 36 cells)
-        # Total: 6 + 36 = 42 values
+        # Observation space: [x, y, z, vx, vy, vz] + floor grid (10 rows × 12 cols = 120 cells)
+        # Total: 6 + 120 = 126 values
         obs_size = 6 + (self.n_observation_rows * self.n_cols)
         self.observation_space = spaces.Box(
             low=-10.0,
@@ -67,17 +67,21 @@ class RobotCorridorEnv(gym.Env):
             dtype=np.float32
         )
         
-        # Action space: 4 wheel torques in [-1, 1]
+        # Action space: [forward_speed, turn_rate] in [-1, 1]
+        # forward_speed: -1 = full backward, 0 = stop, +1 = full forward
+        # turn_rate: -1 = full left, 0 = straight, +1 = full right
         self.action_space = spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(4,),
+            shape=(2,),
             dtype=np.float32
         )
         
         # State tracking
         self.current_step = 0
         self.previous_x = 0.0
+        self.previous_vx = 0.0  # Track previous velocity for deceleration detection
+
         
         # Rendering
         if self.render_mode == "human" or self.render_mode == "rgb_array":
@@ -95,8 +99,10 @@ class RobotCorridorEnv(gym.Env):
         
         # Reset tracking variables
         self.current_step = 0
+
         # Safe initialization: use 0 if qpos is empty
         self.previous_x = self.data.qpos[0] if len(self.data.qpos) > 0 else 0.0
+        self.previous_vx = 0.0
         
         # Get initial observation
         observation = self._get_obs()
@@ -106,10 +112,31 @@ class RobotCorridorEnv(gym.Env):
     
     def step(self, action):
         """Execute one step in the environment."""
-        # Apply action (clip to valid range and scale to actuator range)
-        # No forward bias - let the robot learn to navigate around obstacles
-        action = np.clip(action, -1.0, 1.0) * 15.0  # Scale to [-15, 15] for good speed
-        self.data.ctrl[:] = action
+        # Convert high-level actions [forward_speed, turn_rate] to wheel speeds
+        forward_speed = np.clip(action[0], -1.0, 1.0)  # -1 to 1
+        turn_rate = np.clip(action[1], -1.0, 1.0)      # -1 to 1
+        
+        # Scale to actual speeds (like in simulation.py)
+        linear_speed = 15.0  # Max forward/backward speed
+        turn_speed = 12.0    # Max turning differential
+        
+        # Calculate base speed and turn differential
+        base_speed = forward_speed * linear_speed
+        turn_diff = turn_rate * turn_speed
+        
+        # Apply differential steering (like simulation.py)
+        # Left wheels get (base_speed - turn_diff)
+        # Right wheels get (base_speed + turn_diff)
+        w_fl = base_speed - turn_diff  # Front left
+        w_fr = base_speed + turn_diff  # Front right  
+        w_rl = base_speed - turn_diff  # Rear left
+        w_rr = base_speed + turn_diff  # Rear right
+        
+        # Apply to MuJoCo
+        self.data.ctrl[0] = w_fl
+        self.data.ctrl[1] = w_fr
+        self.data.ctrl[2] = w_rl
+        self.data.ctrl[3] = w_rr
         
         # Step simulation (2 substeps - balance between speed and stability)
         for _ in range(2):
@@ -156,7 +183,7 @@ class RobotCorridorEnv(gym.Env):
         - 2 = hole
         - 3 = bump (obstacle)
         
-        Shape: (n_rows_behind + 1 + n_rows_ahead, n_cols) = (6, 6)
+        Shape: (n_rows_behind + 1 + n_rows_ahead, n_cols) = (10, 12)
         """
         # Calculate robot's cell position
         robot_row = int(robot_x / self.cell_width)
@@ -298,6 +325,10 @@ class RobotCorridorEnv(gym.Env):
             delta_x = robot_x - self.previous_x
             self.previous_x = robot_x
             
+            # Detect brutal deceleration (sign of getting stuck/blocked)
+            delta_vx = robot_vx - self.previous_vx
+            self.previous_vx = robot_vx
+            
             # Check if on a ramp
             robot_row = int(robot_x / self.cell_width)
             robot_col = int((robot_y + self.corridor_width/2) / self.cell_width)
@@ -315,6 +346,11 @@ class RobotCorridorEnv(gym.Env):
                     reward -= 2.0  # Strong penalty - don't stay on ramp!
                 else:
                     reward -= 0.5  # Normal stuck penalty
+            
+            # Penalty for brutal deceleration (getting stuck on obstacles)
+            if delta_vx < -0.5 and self.current_step > 10:  # Avoid initial spawn effects
+                reward -= 3.0  # Big penalty for sudden slowdown
+                print(f"[DECEL] Brutal deceleration at step {self.current_step}: vx={robot_vx:.2f}, delta_vx={delta_vx:.2f}")
             
             # Small penalty for time (encourage efficiency)
             reward -= 0.01

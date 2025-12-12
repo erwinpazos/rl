@@ -1,6 +1,6 @@
 """
-Simplified PPO training without tyro and tensorboard.
-Just the essentials for training the robot.
+Train robot basic locomotion - Learn to control 4 wheels from scratch.
+No pre-made steering, robot must discover differential drive.
 """
 import os
 import random
@@ -13,31 +13,31 @@ import torch.optim as optim
 import gymnasium as gym
 from torch.distributions.normal import Normal
 
-# Import our custom environment (CPU optimized - MJX not compatible with complex collisions)
-from robot_corridor_env_new import RobotCorridorEnv
+# Import our basic control environment
+from robot_basic_env import RobotBasicEnv
 
 
-# Simple configuration class
+# Configuration for basic control learning
 class Config:
     # Experiment
-    exp_name = "ppo_robot_corridor"
+    exp_name = "basic_robot_control"
     seed = 1
     
-    # Training
-    total_timesteps = 4000000  # Faster training for testing
+    # Training - Longer episodes for exploration
+    total_timesteps = 8000000  # 2M steps for basic control
     learning_rate = 3e-4
-    num_envs = 28  # Optimized for 32 CPU cores
+    num_envs = 16  # Fewer envs, more exploration per env
     num_steps = 2048
     gamma = 0.99
     gae_lambda = 0.95
     
-    # PPO
-    num_minibatches = 32
+    # PPO - Higher exploration for discovery
+    num_minibatches = 16
     update_epochs = 10
     norm_adv = True
     clip_coef = 0.2
     clip_vloss = True
-    ent_coef = 0.05  # Increased from 0.01 to 0.05 for more exploration
+    ent_coef = 0.2  # Very high exploration for learning control
     vf_coef = 0.5
     max_grad_norm = 0.5
     
@@ -47,10 +47,10 @@ class Config:
     num_iterations = 0
 
 
-def make_env(corridor_xml="corridor_3x100.xml"):
-    """Create a single environment (CPU optimized)."""
+def make_env():
+    """Create a single basic control environment."""
     def thunk():
-        env = RobotCorridorEnv(corridor_xml=corridor_xml)
+        env = RobotBasicEnv()
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env = gym.wrappers.ClipAction(env)
         return env
@@ -63,119 +63,63 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
-class Agent(nn.Module):
+class BasicControlAgent(nn.Module):
+    """
+    Agent for learning basic robot control.
+    Simpler architecture focused on motor control learning.
+    """
     def __init__(self, envs):
         super().__init__()
-        obs_shape = np.array(envs.single_observation_space.shape).prod()
-        action_shape = np.prod(envs.single_action_space.shape)
+        obs_shape = np.array(envs.single_observation_space.shape).prod()  # 13 values
+        action_shape = np.prod(envs.single_action_space.shape)  # 4 wheel torques
         
-        # Separate robot state (6 values) from grid observation (120 values)
-        self.robot_state_size = 6  # x, y, z, vx, vy, vz
-        self.grid_size = obs_shape - self.robot_state_size  # 10x12 = 120 grid cells
-        
-        # Robot state encoder (position + velocity)
-        self.robot_encoder = nn.Sequential(
-            layer_init(nn.Linear(self.robot_state_size, 32)),
-            nn.ReLU(),
-            layer_init(nn.Linear(32, 32)),
-            nn.ReLU(),
-        )
-        
-        # Grid encoder (spatial awareness) - CNN for spatial patterns
-        # Reshape 120 values to 10x12 spatial grid
-        self.grid_conv = nn.Sequential(
-            # Input: 1 channel, 10x12 grid
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),  # 16x10x12
-            nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=3, padding=1), # 32x10x12
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),                          # 32x5x6
-            nn.Conv2d(32, 64, kernel_size=3, padding=1), # 64x5x6
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d((2, 3)),                # 64x2x3 = 384 features
-            nn.Flatten(),                                # 384
-        )
-        
-        self.grid_encoder = nn.Sequential(
-            layer_init(nn.Linear(384, 128)),
-            nn.ReLU(),
-            layer_init(nn.Linear(128, 64)),
-            nn.ReLU(),
-            layer_init(nn.Linear(64, 32)),
-            nn.ReLU(),
-        )
-        
-        # Combined features
-        combined_size = 32 + 32  # robot_encoder + grid_encoder
-        
-        # Shared backbone
-        self.backbone = nn.Sequential(
-            layer_init(nn.Linear(combined_size, 128)),
+        # Shared feature extractor
+        self.feature_extractor = nn.Sequential(
+            layer_init(nn.Linear(obs_shape, 128)),
             nn.ReLU(),
             layer_init(nn.Linear(128, 128)),
             nn.ReLU(),
-            nn.Dropout(0.1),  # Regularization
             layer_init(nn.Linear(128, 64)),
             nn.ReLU(),
         )
         
-        # Critic head (value function)
+        # Value function (critic)
         self.critic = nn.Sequential(
             layer_init(nn.Linear(64, 32)),
             nn.ReLU(),
             layer_init(nn.Linear(32, 1), std=1.0),
         )
         
-        # Actor head (policy)
+        # Policy (actor) - outputs mean for each wheel
         self.actor_mean = nn.Sequential(
             layer_init(nn.Linear(64, 32)),
             nn.ReLU(),
             layer_init(nn.Linear(32, action_shape), std=0.01),
         )
         
+        # Learnable log standard deviation for exploration
         self.actor_logstd = nn.Parameter(torch.zeros(1, action_shape))
 
-    def forward(self, x):
-        batch_size = x.shape[0]
-        
-        # Split observation into robot state and grid
-        robot_state = x[:, :self.robot_state_size]  # First 6 values
-        grid_obs = x[:, self.robot_state_size:]     # Remaining 120 values
-        
-        # Encode robot state
-        robot_features = self.robot_encoder(robot_state)
-        
-        # Reshape grid to 2D spatial format and process with CNN
-        grid_2d = grid_obs.view(batch_size, 1, 10, 12)  # Batch x 1 x 10 x 12
-        grid_conv_features = self.grid_conv(grid_2d)     # Extract spatial features
-        grid_features = self.grid_encoder(grid_conv_features)  # Final encoding
-        
-        # Combine features
-        combined = torch.cat([robot_features, grid_features], dim=1)
-        
-        # Shared processing
-        features = self.backbone(combined)
-        
-        return features
-
     def get_value(self, x):
-        features = self.forward(x)
+        features = self.feature_extractor(x)
         return self.critic(features)
 
     def get_action_and_value(self, x, action=None):
-        features = self.forward(x)
+        features = self.feature_extractor(x)
         
         action_mean = self.actor_mean(features)
         action_logstd = self.actor_logstd.expand_as(action_mean)
         action_std = torch.exp(action_logstd)
         probs = Normal(action_mean, action_std)
+        
         if action is None:
             action = probs.sample()
+        
         return action, probs.log_prob(action).sum(1), probs.entropy().sum(1), self.critic(features)
 
 
-def train(corridor_xml="corridor_3x100.xml"):
-    """Main training function."""
+def train(resume_from=None):
+    """Main training function for basic control."""
     args = Config()
     
     # Compute batch sizes
@@ -186,14 +130,14 @@ def train(corridor_xml="corridor_3x100.xml"):
     run_name = f"{args.exp_name}_{args.seed}_{int(time.time())}"
     
     print("="*60)
-    print("PPO TRAINING - ROBOT CORRIDOR")
+    print("BASIC ROBOT CONTROL TRAINING")
     print("="*60)
     print(f"Run name: {run_name}")
-    print(f"Corridor XML: {corridor_xml}")
     print(f"Total timesteps: {args.total_timesteps:,}")
     print(f"Iterations: {args.num_iterations}")
     print(f"Parallel envs: {args.num_envs}")
     print(f"Steps per iteration: {args.num_steps}")
+    print(f"Learning: 4-wheel differential drive from scratch")
     print("="*60)
     print()
 
@@ -205,12 +149,30 @@ def train(corridor_xml="corridor_3x100.xml"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}\n")
 
-    # Create environments (ASYNC for better parallelization)
-    envs = gym.vector.AsyncVectorEnv([make_env(corridor_xml) for _ in range(args.num_envs)])
+    # Create environments
+    envs = gym.vector.AsyncVectorEnv([make_env() for _ in range(args.num_envs)])
 
     # Create agent
-    agent = Agent(envs).to(device)
+    agent = BasicControlAgent(envs).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
+    
+    # Resume from checkpoint if available
+    start_iteration = 1
+    if resume_from:
+        print(f"Loading checkpoint from {resume_from}")
+        checkpoint = torch.load(resume_from, map_location=device)
+        agent.load_state_dict(checkpoint['agent_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        start_iteration = checkpoint['iteration'] + 1
+        global_step = checkpoint['global_step']
+        best_avg_return = checkpoint.get('best_avg_return', float('-inf'))
+        best_success_rate = checkpoint.get('best_success_rate', 0.0)
+        print(f"Resumed from iteration {start_iteration}, global step {global_step}")
+        print(f"Previous best: Avg Return {best_avg_return:.2f}, Success Rate {best_success_rate:.2f}")
+    else:
+        global_step = 0
+        best_avg_return = float('-inf')
+        best_success_rate = 0.0
 
     # Storage
     obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
@@ -221,7 +183,6 @@ def train(corridor_xml="corridor_3x100.xml"):
     values = torch.zeros((args.num_steps, args.num_envs)).to(device)
 
     # Start training
-    global_step = 0
     start_time = time.time()
     next_obs, _ = envs.reset(seed=args.seed)
     next_obs = torch.Tensor(next_obs).to(device)
@@ -230,10 +191,16 @@ def train(corridor_xml="corridor_3x100.xml"):
     # Track statistics
     episode_returns = []
     episode_lengths = []
+    targets_reached = []
+    
+    # Best model tracking
+    best_avg_return = float('-inf')
+    best_success_rate = 0.0
+    iterations_without_improvement = 0
 
-    print("Starting training...\n")
+    print("Starting basic control training...\n")
 
-    for iteration in range(1, args.num_iterations + 1):
+    for iteration in range(start_iteration, args.num_iterations + 1):
         # Collect rollouts
         for step in range(0, args.num_steps):
             global_step += args.num_envs
@@ -260,19 +227,14 @@ def train(corridor_xml="corridor_3x100.xml"):
                         episode_returns.append(info["episode"]["r"])
                         episode_lengths.append(info["episode"]["l"])
                         
-                        # Print every episode
-                        print(f"Step {global_step:>8} | Return: {info['episode']['r']:>7.2f} | Length: {info['episode']['l']:>4}")
-            
-            # Also count manual terminations (terminated=True but not in final_info)
-            for env_id in range(args.num_envs):
-                if terminations[env_id] or truncations[env_id]:
-                    # Episode ended, but we don't have the full stats from RecordEpisodeStatistics
-                    # Just count it
-                    if len(episode_returns) == 0 or step > 0:  # Avoid counting initial resets
-                        pass  # Stats will come from final_info if available
-            
-            # DEBUG: AsyncVectorEnv doesn't expose individual envs directly
-            # Position debugging removed for AsyncVectorEnv compatibility
+                        # Count targets reached (estimate from high rewards)
+                        if info["episode"]["r"] > 10:
+                            targets_reached.append(1)
+                        else:
+                            targets_reached.append(0)
+                        
+                        # Print every episode with control info
+                        print(f"Step {global_step:>8} | Return: {info['episode']['r']:>7.2f} | Length: {info['episode']['l']:>4} | Targets: {sum(targets_reached[-10:])}/10")
 
         # Compute advantages (GAE)
         with torch.no_grad():
@@ -340,7 +302,7 @@ def train(corridor_xml="corridor_3x100.xml"):
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
 
-        # Print iteration summary with detailed stats
+        # Print iteration summary
         sps = int(global_step / (time.time() - start_time))
         elapsed_time = time.time() - start_time
         
@@ -351,33 +313,90 @@ def train(corridor_xml="corridor_3x100.xml"):
         
         if len(episode_returns) > 0:
             recent_returns = episode_returns[-10:] if len(episode_returns) >= 10 else episode_returns
-            recent_lengths = episode_lengths[-10:] if len(episode_lengths) >= 10 else episode_lengths
+            recent_targets = targets_reached[-10:] if len(targets_reached) >= 10 else targets_reached
             
             print(f"\nEpisodes completed: {len(episode_returns)}")
             print(f"  Last 10 episodes:")
-            print(f"    Avg Return:  {np.mean(recent_returns):>8.2f} (min: {np.min(recent_returns):>7.2f}, max: {np.max(recent_returns):>7.2f})")
-            print(f"    Avg Length:  {np.mean(recent_lengths):>8.0f} (min: {np.min(recent_lengths):>7.0f}, max: {np.max(recent_lengths):>7.0f})")
+            print(f"    Avg Return:  {np.mean(recent_returns):>8.2f}")
+            print(f"    Targets Hit: {sum(recent_targets)}/10 ({100*np.mean(recent_targets):.1f}%)")
             print(f"  All time:")
             print(f"    Best Return: {np.max(episode_returns):>8.2f}")
-            print(f"    Avg Return:  {np.mean(episode_returns):>8.2f}")
+            print(f"    Success Rate: {100*np.mean(targets_reached):.1f}%")
         else:
-            print(f"\n⚠️  Episode stats not available")
-            print(f"   (Episodes are terminating - see [TERM] messages above)")
-            print(f"   RecordEpisodeStatistics may not be capturing all terminations")
+            print(f"\n⚠️  No episodes completed yet")
         
         print(f"{'='*80}\n")
         
-        # Flush output to see it immediately
+        # Evaluate performance and save best model
+        checkpoint_dir = f"models/{run_name}"
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        # Calculate current performance metrics
+        current_avg_return = np.mean(episode_returns[-50:]) if len(episode_returns) >= 50 else (np.mean(episode_returns) if episode_returns else float('-inf'))
+        current_success_rate = np.mean(targets_reached[-50:]) if len(targets_reached) >= 50 else (np.mean(targets_reached) if targets_reached else 0.0)
+        
+        # Check if this is the best model so far
+        is_best = False
+        if current_avg_return > best_avg_return or (current_avg_return == best_avg_return and current_success_rate > best_success_rate):
+            best_avg_return = current_avg_return
+            best_success_rate = current_success_rate
+            iterations_without_improvement = 0
+            is_best = True
+            
+            # Save best model
+            best_model_path = f"{checkpoint_dir}/best_model.pth"
+            torch.save({
+                'iteration': iteration,
+                'global_step': global_step,
+                'agent_state_dict': agent.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'best_avg_return': best_avg_return,
+                'best_success_rate': best_success_rate,
+                'args': args,
+            }, best_model_path)
+            print(f"🏆 NEW BEST MODEL! Avg Return: {current_avg_return:.2f}, Success Rate: {current_success_rate:.2f}")
+            print(f"💾 Best model saved: {best_model_path}")
+        else:
+            iterations_without_improvement += 1
+        
+        # Save regular checkpoint every 10 iterations
+        if iteration % 10 == 0:
+            checkpoint_path = f"{checkpoint_dir}/checkpoint_iter_{iteration}.pth"
+            torch.save({
+                'iteration': iteration,
+                'global_step': global_step,
+                'agent_state_dict': agent.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'best_avg_return': best_avg_return,
+                'best_success_rate': best_success_rate,
+                'args': args,
+            }, checkpoint_path)
+            print(f"💾 Checkpoint saved: {checkpoint_path}")
+            
+            # Keep only last 3 checkpoints to save space
+            import glob
+            checkpoints = glob.glob(f"{checkpoint_dir}/checkpoint_iter_*.pth")
+            checkpoints.sort(key=lambda x: int(x.split('_')[-1].split('.')[0]))
+            if len(checkpoints) > 3:
+                for old_checkpoint in checkpoints[:-3]:
+                    os.remove(old_checkpoint)
+                    print(f"🗑️  Removed old checkpoint: {old_checkpoint}")
+        
+        # Early stopping if no improvement for too long
+        if iterations_without_improvement > 50:
+            print(f"⚠️  No improvement for {iterations_without_improvement} iterations. Consider stopping.")
+        
+        # Flush output
         import sys
         sys.stdout.flush()
 
     # Save model
     model_dir = f"models/{run_name}"
     os.makedirs(model_dir, exist_ok=True)
-    model_path = f"{model_dir}/ppo_robot_corridor.pth"
+    model_path = f"{model_dir}/basic_control.pth"
     torch.save(agent.state_dict(), model_path)
     print(f"\n{'='*60}")
-    print(f"Training complete!")
+    print(f"Basic control training complete!")
     print(f"Model saved to: {model_path}")
     print(f"{'='*60}\n")
 
@@ -387,16 +406,51 @@ def train(corridor_xml="corridor_3x100.xml"):
         print(f"  Episodes completed: {len(episode_returns)}")
         print(f"  Average return: {np.mean(episode_returns):.2f} ± {np.std(episode_returns):.2f}")
         print(f"  Best return: {max(episode_returns):.2f}")
-        print(f"  Average length: {np.mean(episode_lengths):.2f}")
+        print(f"  Target success rate: {100*np.mean(targets_reached):.1f}%")
         print()
 
     envs.close()
 
 
+def find_latest_checkpoint():
+    """Find the latest checkpoint to resume from."""
+    import glob
+    checkpoints = glob.glob("models/basic_robot_control_*/checkpoint_iter_*.pth")
+    if not checkpoints:
+        return None
+    
+    # Sort by modification time and return the latest
+    checkpoints.sort(key=os.path.getmtime, reverse=True)
+    return checkpoints[0]
+
+
+def find_best_model():
+    """Find the best model for testing."""
+    import glob
+    best_models = glob.glob("models/basic_robot_control_*/best_model.pth")
+    if not best_models:
+        return None
+    
+    # Sort by modification time and return the latest
+    best_models.sort(key=os.path.getmtime, reverse=True)
+    return best_models[0]
+
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train PPO agent on robot corridor")
-    parser.add_argument("--corridor", type=str, default="corridor_3x100.xml", 
-                       help="Corridor XML file to use (default: corridor_3x100.xml)")
+    parser = argparse.ArgumentParser(description="Train basic robot control")
+    parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoint")
+    parser.add_argument("--checkpoint", type=str, help="Specific checkpoint to resume from")
     args = parser.parse_args()
     
-    train(corridor_xml=args.corridor)
+    resume_from = None
+    if args.checkpoint:
+        resume_from = args.checkpoint
+        print(f"Resuming from specified checkpoint: {resume_from}")
+    elif args.resume:
+        resume_from = find_latest_checkpoint()
+        if resume_from:
+            print(f"Auto-detected latest checkpoint: {resume_from}")
+        else:
+            print("No checkpoint found, starting fresh training")
+    
+    train(resume_from=resume_from)

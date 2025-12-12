@@ -1,14 +1,16 @@
 """
-Test a trained PPO agent on the Robot Corridor environment.
+Test a trained basic control agent.
 """
 import torch
 import torch.nn as nn
 import numpy as np
-from robot_corridor_env_new import RobotCorridorEnv
+from robot_basic_env import RobotBasicEnv
 import gymnasium as gym
 import mujoco
 from mujoco import viewer
 import time
+import argparse
+import glob
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
@@ -17,151 +19,88 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
-class Agent(nn.Module):
-    """PPO Agent with CNN architecture (copied from train_ppo_new_corridor.py)."""
+class BasicControlAgent(nn.Module):
+    """Agent for basic robot control (copied from train_basic_control.py)."""
     def __init__(self, envs):
         super().__init__()
-        obs_shape = np.array(envs.single_observation_space.shape).prod()
-        action_shape = np.prod(envs.single_action_space.shape)
+        obs_shape = np.array(envs.single_observation_space.shape).prod()  # 13 values
+        action_shape = np.prod(envs.single_action_space.shape)  # 4 wheel torques
         
-        # Separate robot state (6 values) from grid observation (120 values)
-        self.robot_state_size = 6  # x, y, z, vx, vy, vz
-        self.grid_size = obs_shape - self.robot_state_size  # 10x12 = 120 grid cells
-        
-        # Robot state encoder (position + velocity)
-        self.robot_encoder = nn.Sequential(
-            layer_init(nn.Linear(self.robot_state_size, 32)),
-            nn.ReLU(),
-            layer_init(nn.Linear(32, 32)),
-            nn.ReLU(),
-        )
-        
-        # Grid encoder (spatial awareness) - CNN for spatial patterns
-        # Reshape 120 values to 10x12 spatial grid
-        self.grid_conv = nn.Sequential(
-            # Input: 1 channel, 10x12 grid
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),  # 16x10x12
-            nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=3, padding=1), # 32x10x12
-            nn.ReLU(),
-            nn.MaxPool2d(2, 2),                          # 32x5x6
-            nn.Conv2d(32, 64, kernel_size=3, padding=1), # 64x5x6
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d((2, 3)),                # 64x2x3 = 384 features
-            nn.Flatten(),                                # 384
-        )
-        
-        self.grid_encoder = nn.Sequential(
-            layer_init(nn.Linear(384, 128)),
-            nn.ReLU(),
-            layer_init(nn.Linear(128, 64)),
-            nn.ReLU(),
-            layer_init(nn.Linear(64, 32)),
-            nn.ReLU(),
-        )
-        
-        # Combined features
-        combined_size = 32 + 32  # robot_encoder + grid_encoder
-        
-        # Shared backbone
-        self.backbone = nn.Sequential(
-            layer_init(nn.Linear(combined_size, 128)),
+        # Shared feature extractor
+        self.feature_extractor = nn.Sequential(
+            layer_init(nn.Linear(obs_shape, 128)),
             nn.ReLU(),
             layer_init(nn.Linear(128, 128)),
             nn.ReLU(),
-            nn.Dropout(0.1),  # Regularization
             layer_init(nn.Linear(128, 64)),
             nn.ReLU(),
         )
         
-        # Critic head (value function)
+        # Value function (critic)
         self.critic = nn.Sequential(
             layer_init(nn.Linear(64, 32)),
             nn.ReLU(),
             layer_init(nn.Linear(32, 1), std=1.0),
         )
         
-        # Actor head (policy)
+        # Policy (actor) - outputs mean for each wheel
         self.actor_mean = nn.Sequential(
             layer_init(nn.Linear(64, 32)),
             nn.ReLU(),
             layer_init(nn.Linear(32, action_shape), std=0.01),
         )
         
+        # Learnable log standard deviation for exploration
         self.actor_logstd = nn.Parameter(torch.zeros(1, action_shape))
 
-    def forward(self, x):
-        batch_size = x.shape[0]
-        
-        # Split observation into robot state and grid
-        robot_state = x[:, :self.robot_state_size]  # First 6 values
-        grid_obs = x[:, self.robot_state_size:]     # Remaining 120 values
-        
-        # Encode robot state
-        robot_features = self.robot_encoder(robot_state)
-        
-        # Reshape grid to 2D spatial format and process with CNN
-        grid_2d = grid_obs.view(batch_size, 1, 10, 12)  # Batch x 1 x 10 x 12
-        grid_conv_features = self.grid_conv(grid_2d)     # Extract spatial features
-        grid_features = self.grid_encoder(grid_conv_features)  # Final encoding
-        
-        # Combine features
-        combined = torch.cat([robot_features, grid_features], dim=1)
-        
-        # Shared processing
-        features = self.backbone(combined)
-        
-        return features
-
     def get_value(self, x):
-        features = self.forward(x)
+        features = self.feature_extractor(x)
         return self.critic(features)
 
     def get_action_and_value(self, x, action=None):
-        features = self.forward(x)
+        features = self.feature_extractor(x)
         
         action_mean = self.actor_mean(features)
         action_logstd = self.actor_logstd.expand_as(action_mean)
         action_std = torch.exp(action_logstd)
         probs = torch.distributions.Normal(action_mean, action_std)
+        
         if action is None:
             action = probs.sample()
+        
         return action, probs.log_prob(action).sum(1), probs.entropy().sum(1), self.critic(features)
 
 
-def test_agent(model_path, num_episodes=10, render=False, corridor_xml="corridor_3x100.xml"):
+def test_basic_control(model_path, num_episodes=10, render=False):
     """
-    Test a trained agent.
+    Test a trained basic control agent.
     
     Args:
         model_path: Path to the saved model
         num_episodes: Number of episodes to test
         render: Whether to render the environment
-        corridor_xml: Corridor XML file to use
     """
-    # Create environment (no render mode for now)
-    env = RobotCorridorEnv(corridor_xml=corridor_xml)
+    # Create environment
+    env = RobotBasicEnv()
     
     # Create a dummy vectorized env for agent initialization
     dummy_env = gym.vector.SyncVectorEnv([lambda: env])
     
     # Load agent
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    agent = Agent(dummy_env).to(device)
+    agent = BasicControlAgent(dummy_env).to(device)
     agent.load_state_dict(torch.load(model_path, map_location=device))
     agent.eval()
     
-    print(f"Testing agent from {model_path}")
-    print(f"Corridor XML: {corridor_xml}")
+    print(f"Testing basic control agent from {model_path}")
     print(f"Device: {device}\n")
     
     episode_returns = []
     episode_lengths = []
-    final_positions = []
-    successes = 0
+    targets_reached = []
     
     if render:
-        # Use MuJoCo viewer like simulation.py
+        # Use MuJoCo viewer
         m = env.model
         d = env.data
         
@@ -173,15 +112,17 @@ def test_agent(model_path, num_episodes=10, render=False, corridor_xml="corridor
             cam.trackbodyid = robot_body_id
             cam.azimuth = 180
             cam.elevation = -20
-            cam.distance = 10
+            cam.distance = 15
             
             for episode in range(num_episodes):
                 obs, info = env.reset()
                 done = False
                 episode_return = 0
                 episode_length = 0
+                targets_hit = 0
                 
                 print(f"\nEpisode {episode + 1} starting...")
+                print(f"Target: ({info['target_x']:.1f}, {info['target_y']:.1f})")
                 
                 while not done and v.is_running():
                     # Get action from policy
@@ -197,6 +138,11 @@ def test_agent(model_path, num_episodes=10, render=False, corridor_xml="corridor
                     episode_return += reward
                     episode_length += 1
                     
+                    # Check if target was reached (high reward spike)
+                    if reward > 15:
+                        targets_hit += 1
+                        print(f"  Target reached! New target: ({info['target_x']:.1f}, {info['target_y']:.1f})")
+                    
                     # Render
                     cam.trackbodyid = robot_body_id
                     v.sync()
@@ -205,16 +151,13 @@ def test_agent(model_path, num_episodes=10, render=False, corridor_xml="corridor
                 # Record statistics
                 episode_returns.append(episode_return)
                 episode_lengths.append(episode_length)
-                final_x = info['x_position']
-                final_positions.append(final_x)
-                
-                if final_x >= 100.0:
-                    successes += 1
+                targets_reached.append(targets_hit)
                 
                 print(f"Episode {episode + 1}:")
                 print(f"  Return: {episode_return:.2f}")
                 print(f"  Length: {episode_length}")
-                print(f"  Final X: {final_x:.2f}m")
+                print(f"  Targets Hit: {targets_hit}")
+                print(f"  Final Position: ({info['x_position']:.2f}, {info['y_position']:.2f})")
                 print(f"  Termination: {info.get('termination_reason', 'truncated')}")
                 
                 if not v.is_running():
@@ -226,6 +169,10 @@ def test_agent(model_path, num_episodes=10, render=False, corridor_xml="corridor
             done = False
             episode_return = 0
             episode_length = 0
+            targets_hit = 0
+            
+            print(f"\nEpisode {episode + 1} starting...")
+            print(f"Target: ({info['target_x']:.1f}, {info['target_y']:.1f})")
             
             while not done:
                 # Get action from policy
@@ -240,33 +187,34 @@ def test_agent(model_path, num_episodes=10, render=False, corridor_xml="corridor
                 
                 episode_return += reward
                 episode_length += 1
+                
+                # Check if target was reached
+                if reward > 15:
+                    targets_hit += 1
+                    print(f"  Target reached! New target: ({info['target_x']:.1f}, {info['target_y']:.1f})")
             
             # Record statistics
             episode_returns.append(episode_return)
             episode_lengths.append(episode_length)
-            final_x = info['x_position']
-            final_positions.append(final_x)
-            
-            if final_x >= 100.0:
-                successes += 1
+            targets_reached.append(targets_hit)
             
             print(f"Episode {episode + 1}:")
             print(f"  Return: {episode_return:.2f}")
             print(f"  Length: {episode_length}")
-            print(f"  Final X: {final_x:.2f}m")
+            print(f"  Targets Hit: {targets_hit}")
+            print(f"  Final Position: ({info['x_position']:.2f}, {info['y_position']:.2f})")
             print(f"  Termination: {info.get('termination_reason', 'truncated')}")
-            print()
     
     # Summary statistics
     print("\n" + "="*50)
-    print("SUMMARY STATISTICS")
+    print("BASIC CONTROL TEST SUMMARY")
     print("="*50)
     print(f"Episodes: {num_episodes}")
     print(f"Average Return: {np.mean(episode_returns):.2f} ± {np.std(episode_returns):.2f}")
     print(f"Average Length: {np.mean(episode_lengths):.2f} ± {np.std(episode_lengths):.2f}")
-    print(f"Average Final X: {np.mean(final_positions):.2f}m ± {np.std(final_positions):.2f}m")
-    print(f"Success Rate: {successes}/{num_episodes} ({100*successes/num_episodes:.1f}%)")
-    print(f"Max Distance: {max(final_positions):.2f}m")
+    print(f"Total Targets Hit: {sum(targets_reached)}")
+    print(f"Avg Targets per Episode: {np.mean(targets_reached):.2f}")
+    print(f"Success Rate: {100 * sum(t > 0 for t in targets_reached) / num_episodes:.1f}%")
     print("="*50)
     
     env.close()
@@ -274,36 +222,38 @@ def test_agent(model_path, num_episodes=10, render=False, corridor_xml="corridor
     return {
         'returns': episode_returns,
         'lengths': episode_lengths,
-        'positions': final_positions,
-        'success_rate': successes / num_episodes
+        'targets': targets_reached,
+        'success_rate': sum(t > 0 for t in targets_reached) / num_episodes
     }
 
 
 if __name__ == "__main__":
-    import argparse
-    import glob
-    
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", type=str, default=None, help="Path to trained model (auto-finds latest if not provided)")
     parser.add_argument("--episodes", type=int, default=10, help="Number of test episodes")
     parser.add_argument("--render", action="store_true", help="Render the environment")
-    parser.add_argument("--corridor", type=str, default="corridor_3x100.xml", help="Corridor XML file to use")
     
     args = parser.parse_args()
     
-    # Auto-find latest model if not provided
+    # Auto-find best model if not provided
     model_path = args.model_path
     if model_path is None:
-        # Search for models in models/ppo_robot_corridor_*/ppo_robot_corridor.pth
-        model_files = glob.glob("models/ppo_robot_corridor_*/ppo_robot_corridor.pth")
-        if not model_files:
-            print("ERROR: No trained models found in models/ppo_robot_corridor_*/")
-            print("Please train a model first using train_ppo_simple.py")
-            exit(1)
-        
-        # Sort by timestamp (embedded in directory name) and take the latest
-        model_files.sort(reverse=True)
-        model_path = model_files[0]
-        print(f"Auto-detected latest model: {model_path}\n")
+        # First try to find best model
+        best_models = glob.glob("models/basic_robot_control_*/best_model.pth")
+        if best_models:
+            best_models.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+            model_path = best_models[0]
+            print(f"Auto-detected BEST model: {model_path}\n")
+        else:
+            # Fallback to regular models
+            model_files = glob.glob("models/basic_robot_control_*/basic_control.pth")
+            if not model_files:
+                print("ERROR: No trained models found in models/basic_robot_control_*/")
+                print("Please train a model first using train_basic_control.py")
+                exit(1)
+            
+            model_files.sort(reverse=True)
+            model_path = model_files[0]
+            print(f"Auto-detected latest model: {model_path}\n")
     
-    test_agent(model_path, args.episodes, args.render, args.corridor)
+    test_basic_control(model_path, args.episodes, args.render)

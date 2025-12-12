@@ -3,11 +3,12 @@ Visualize the entire corridor cell map as the robot would see it.
 """
 from robot_corridor_env_new import RobotCorridorEnv
 import numpy as np
+import argparse
 
-def visualize_full_corridor():
+def visualize_full_corridor(corridor_xml="corridor_3x100.xml"):
     """Print the entire corridor cell map."""
     # Create environment
-    env = RobotCorridorEnv()
+    env = RobotCorridorEnv(corridor_xml=corridor_xml)
     
     # Get the cell map
     cell_map = env.cell_map_semantic
@@ -19,6 +20,7 @@ def visualize_full_corridor():
     print("="*80)
     print("CORRIDOR CELL MAP")
     print("="*80)
+    print(f"Corridor XML: {corridor_xml}")
     print(f"Dimensions: {max_row+1} rows × {max_col+1} cols")
     print(f"Cell size: {env.cell_width}m × {env.cell_width}m")
     print(f"Total length: {(max_row+1) * env.cell_width}m")
@@ -66,4 +68,9 @@ def visualize_full_corridor():
     env.close()
 
 if __name__ == "__main__":
-    visualize_full_corridor()
+    parser = argparse.ArgumentParser(description="Visualize corridor cell map")
+    parser.add_argument("--corridor", type=str, default="corridor_3x100.xml", 
+                       help="Corridor XML file to visualize (default: corridor_3x100.xml)")
+    args = parser.parse_args()
+    
+    visualize_full_corridor(corridor_xml=args.corridor)
