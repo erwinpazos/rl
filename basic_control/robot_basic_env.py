@@ -268,7 +268,9 @@ class RobotBasicEnv(gym.Env):
             prev_dist = getattr(self, 'prev_target_dist', dist_to_target)
             self.prev_target_dist = dist_to_target
             
-            if dist_to_target < 1.0:  # Reached target
+            # Dynamic target radius (can be set externally)
+            target_radius = getattr(self, 'target_radius', 1.0)
+            if dist_to_target < target_radius:  # Reached target
                 target_reward = 100.0  # Big reward!
                 # Set new random target (curriculum-based)
                 if self.total_steps < 500000:
@@ -309,8 +311,9 @@ class RobotBasicEnv(gym.Env):
             # 5. No spin penalty - allow free rotation for learning to turn
             spin_penalty = 0.0
             
-            # 6. Minimal time penalty
-            time_penalty = -0.001  # Much smaller
+            # 6. Time penalty (increases with difficulty)
+            time_multiplier = getattr(self, 'time_penalty_multiplier', 1.0)
+            time_penalty = -0.001 * time_multiplier
             
             # Total reward
             reward = movement_reward + target_reward + stability_reward + spin_penalty + time_penalty + orientation_reward + turning_reward
@@ -327,15 +330,48 @@ class RobotBasicEnv(gym.Env):
         
         return reward, terminated, info
     
+    def set_difficulty(self, target_radius=1.0, time_pressure=False):
+        """Set curriculum difficulty parameters."""
+        self.target_radius = target_radius
+        self.time_pressure = time_pressure
+        if time_pressure:
+            # Increase time penalty for efficiency
+            self.time_penalty_multiplier = 10.0
+        else:
+            self.time_penalty_multiplier = 1.0
+        
+        # Update visual marker size
+        self._update_target_marker()
+    
     def _update_target_marker(self):
-        """Update the visual target marker position."""
+        """Update the visual target marker position and visibility."""
         try:
-            target_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'target')
-            if target_body_id >= 0:
-                # Update target position in the model
-                self.model.body_pos[target_body_id] = [self.target_x, self.target_y, 0.1]
+            target_radius = getattr(self, 'target_radius', 1.0)
+            
+            # Determine which marker to show based on target radius
+            if target_radius >= 0.9:
+                active_marker = 'target_large'
+                inactive_markers = ['target_medium', 'target_small']
+            elif target_radius >= 0.6:
+                active_marker = 'target_medium'
+                inactive_markers = ['target_large', 'target_small']
+            else:
+                active_marker = 'target_small'
+                inactive_markers = ['target_large', 'target_medium']
+            
+            # Update position of active marker
+            active_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, active_marker)
+            if active_body_id >= 0:
+                self.model.body_pos[active_body_id] = [self.target_x, self.target_y, 0.1]
+            
+            # Hide inactive markers (move them far away)
+            for inactive_marker in inactive_markers:
+                inactive_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, inactive_marker)
+                if inactive_body_id >= 0:
+                    self.model.body_pos[inactive_body_id] = [1000, 1000, -10]  # Hide far away
+                    
         except:
-            # If target body doesn't exist, ignore silently
+            # If target bodies don't exist, ignore silently
             pass
     
     def _build_flat_world_model(self, robot_xml):
@@ -398,21 +434,51 @@ class RobotBasicEnv(gym.Env):
         ground.set('friction', '1 0.1 0.1')
         worldbody.append(ground)
         
-        # Add target marker (will be moved dynamically)
-        target_marker = ET.Element('body')
-        target_marker.set('name', 'target')
-        target_marker.set('pos', '10 0 0.1')  # Initial position
+        # Add multiple target markers for different difficulty levels
+        # Large target (easy)
+        target_large = ET.Element('body')
+        target_large.set('name', 'target_large')
+        target_large.set('pos', '10 0 0.1')
         
-        target_geom = ET.Element('geom')
-        target_geom.set('name', 'target_marker')
-        target_geom.set('type', 'cylinder')
-        target_geom.set('size', '0.5 0.05')  # radius=0.5m, height=0.1m
-        target_geom.set('rgba', '0 1 0 0.8')  # Green, semi-transparent
-        target_geom.set('contype', '0')  # No collision
-        target_geom.set('conaffinity', '0')  # No collision
-        target_marker.append(target_geom)
+        geom_large = ET.Element('geom')
+        geom_large.set('name', 'target_marker_large')
+        geom_large.set('type', 'cylinder')
+        geom_large.set('size', '0.5 0.02')  # 0.5m radius = 1.0m diameter
+        geom_large.set('rgba', '0 1 0 0.8')  # Green
+        geom_large.set('contype', '0')
+        geom_large.set('conaffinity', '0')
+        target_large.append(geom_large)
+        worldbody.append(target_large)
         
-        worldbody.append(target_marker)
+        # Medium target
+        target_medium = ET.Element('body')
+        target_medium.set('name', 'target_medium')
+        target_medium.set('pos', '10 0 0.1')
+        
+        geom_medium = ET.Element('geom')
+        geom_medium.set('name', 'target_marker_medium')
+        geom_medium.set('type', 'cylinder')
+        geom_medium.set('size', '0.35 0.02')  # 0.35m radius = 0.7m diameter
+        geom_medium.set('rgba', '1 1 0 0.8')  # Yellow
+        geom_medium.set('contype', '0')
+        geom_medium.set('conaffinity', '0')
+        target_medium.append(geom_medium)
+        worldbody.append(target_medium)
+        
+        # Small target (hard)
+        target_small = ET.Element('body')
+        target_small.set('name', 'target_small')
+        target_small.set('pos', '10 0 0.1')
+        
+        geom_small = ET.Element('geom')
+        geom_small.set('name', 'target_marker_small')
+        geom_small.set('type', 'cylinder')
+        geom_small.set('size', '0.2 0.02')  # 0.2m radius = 0.4m diameter
+        geom_small.set('rgba', '1 0 0 0.8')  # Red
+        geom_small.set('contype', '0')
+        geom_small.set('conaffinity', '0')
+        target_small.append(geom_small)
+        worldbody.append(target_small)
         
         # Add robot body from original XML
         for child in robot_root:

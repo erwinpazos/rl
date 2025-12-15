@@ -132,7 +132,7 @@ def train_behavioral_cloning(demonstrations_file='expert_demonstrations.pkl',
 
 
 def test_behavioral_cloning(model_path='behavioral_cloning_model.pth', 
-                          num_episodes=10, render=False):
+                          num_episodes=10, render=False, difficulty='hard'):
     """Test the behavioral cloning agent."""
     from robot_basic_env import RobotBasicEnv
     
@@ -142,8 +142,28 @@ def test_behavioral_cloning(model_path='behavioral_cloning_model.pth',
     model.load_state_dict(torch.load(model_path, map_location=device))
     model.eval()
     
-    # Test environment
+    # Test environment with difficulty setting
     env = RobotBasicEnv()
+    
+    # Set difficulty level
+    if difficulty == 'easy':
+        target_radius = 1.0
+        time_pressure = False
+        print(f"Testing with EASY difficulty: target radius {target_radius}m")
+    elif difficulty == 'medium':
+        target_radius = 0.7
+        time_pressure = False
+        print(f"Testing with MEDIUM difficulty: target radius {target_radius}m")
+    elif difficulty == 'hard':
+        target_radius = 0.4
+        time_pressure = True
+        print(f"Testing with HARD difficulty: target radius {target_radius}m, time pressure ON")
+    else:
+        target_radius = 1.0
+        time_pressure = False
+        print(f"Testing with DEFAULT difficulty: target radius {target_radius}m")
+    
+    env.set_difficulty(target_radius=target_radius, time_pressure=time_pressure)
     
     episode_returns = []
     targets_reached = []
@@ -258,6 +278,8 @@ if __name__ == "__main__":
     parser.add_argument("--train", action="store_true", help="Train behavioral cloning")
     parser.add_argument("--test", action="store_true", help="Test behavioral cloning")
     parser.add_argument("--render", action="store_true", help="Render during testing")
+    parser.add_argument("--difficulty", type=str, default="hard", choices=["easy", "medium", "hard"], 
+                       help="Test difficulty level")
     parser.add_argument("--epochs", type=int, default=200, help="Training epochs")
     args = parser.parse_args()
     
@@ -265,4 +287,4 @@ if __name__ == "__main__":
         train_behavioral_cloning(epochs=args.epochs)
     
     if args.test:
-        test_behavioral_cloning(render=args.render)
+        test_behavioral_cloning(render=args.render, difficulty=args.difficulty)

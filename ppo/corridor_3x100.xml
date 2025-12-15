@@ -21,9 +21,9 @@
 
     <geom name="wall_left" type="box" size="50.000 0.025 4.000" pos="50.000 -1.525 4.000" material="mat_wall" />
     <geom name="wall_right" type="box" size="50.000 0.025 4.000" pos="50.000 1.525 4.000" material="mat_wall" />
-    <geom name="ramp_0" type="box" size="0.5 0.5 0.025" pos="4 0 0.15" euler="0 -15 0" material="mat_bump" />
-    <geom name="ramp_1" type="box" size="0.5 0.5 0.025" pos="5 0 0.3" material="mat_bump" />
-    <geom name="ramp_2" type="box" size="0.5 0.5 0.025" pos="6 0 0.15" euler="0 15 0" material="mat_bump" />
+    <geom name="ramp_0" type="box" size="0.5 0.75 0.025" pos="4 0.75 0.15" euler="0 -15 0" material="mat_bump" />
+    <geom name="ramp_1" type="box" size="0.5 0.75 0.025" pos="5 0.75 0.3" material="mat_bump" />
+    <geom name="ramp_2" type="box" size="0.5 0.75 0.025" pos="6 0.75 0.15" euler="0 15 0" material="mat_bump" />
 
     <geom name="ramp_3" type="box" size="0.5 0.5 0.025" pos="11 -1 0.15" euler="0 -15 0" material="mat_bump" />
     <geom name="ramp_4" type="box" size="0.5 0.5 0.025" pos="12 -1 0.3" material="mat_bump" />
@@ -70,9 +70,8 @@
     <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="3.250 0.000 0.025" name="flat_6" />
     
     <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="3.750 0.000 0.025" name="flat_7" />
-    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="4.750 0.000 0.025" name="flat_8" />
-    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="5.250 0.000 0.025" name="flat_9" />
     
+
     <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="5.750 0.000 0.025" name="flat_10" />
     <geom type="box" material="mat_floor" size="0.250 0.150 0.025" pos="6.250 -1.350 0.025" name="flat_11" />
     <geom type="box" material="mat_floor" size="0.250 1.050 0.025" pos="6.250 0.450 0.025" name="flat_12" />
@@ -89,9 +88,7 @@
     <geom type="box" material="mat_floor" size="0.250 0.600 0.025" pos="10.250 -0.900 0.025" name="flat_20" />
     <geom type="box" material="mat_floor" size="0.250 0.600 0.025" pos="10.250 0.900 0.025" name="flat_21" />
     <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="10.750 0.000 0.025" name="flat_22" />
-    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="11.250 0.000 0.025" name="flat_23" />
-    
-    <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="11.750 0.000 0.025" name="flat_24" />
+
     <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="12.750 0.000 0.025" name="flat_25" />
     <geom type="box" material="mat_floor" size="0.250 1.500 0.025" pos="13.250 0.000 0.025" name="flat_26" />
     

@@ -1,260 +1,214 @@
 """
-Train PPO agent on the Robot Corridor environment.
-Based on CleanRL's PPO implementation, adapted for the corridor task.
+Entraînement PPO simple et efficace pour robot corridor.
+Sans LSTM, sans complications. Juste CNN + MLP.
 """
 import os
-import random
 import time
-from dataclasses import dataclass
-
-import gymnasium as gym
+import random
+import argparse
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import tyro
-from torch.distributions.normal import Normal
-from torch.utils.tensorboard import SummaryWriter
+import gymnasium as gym
+from torch.distributions import Normal
 
-# Import our custom environment
-from robot_corridor_env import RobotCorridorEnv
-
-
-@dataclass
-class Args:
-    exp_name: str = "ppo_robot_corridor"
-    """the name of this experiment"""
-    seed: int = 1
-    """seed of the experiment"""
-    torch_deterministic: bool = True
-    """if toggled, `torch.backends.cudnn.deterministic=False`"""
-    cuda: bool = True
-    """if toggled, cuda will be enabled by default"""
-    track: bool = False
-    """if toggled, this experiment will be tracked with Weights and Biases"""
-    wandb_project_name: str = "robot-corridor-ppo"
-    """the wandb's project name"""
-    wandb_entity: str = None
-    """the entity (team) of wandb's project"""
-    capture_video: bool = False
-    """whether to capture videos of the agent performances"""
-    save_model: bool = True
-    """whether to save model into the `runs/{run_name}` folder"""
-
-    # Algorithm specific arguments
-    env_id: str = "RobotCorridor-v0"
-    """the id of the environment"""
-    total_timesteps: int = 2000000
-    """total timesteps of the experiments"""
-    learning_rate: float = 3e-4
-    """the learning rate of the optimizer"""
-    num_envs: int = 4
-    """the number of parallel game environments"""
-    num_steps: int = 2048
-    """the number of steps to run in each environment per policy rollout"""
-    anneal_lr: bool = True
-    """Toggle learning rate annealing for policy and value networks"""
-    gamma: float = 0.99
-    """the discount factor gamma"""
-    gae_lambda: float = 0.95
-    """the lambda for the general advantage estimation"""
-    num_minibatches: int = 32
-    """the number of mini-batches"""
-    update_epochs: int = 10
-    """the K epochs to update the policy"""
-    norm_adv: bool = True
-    """Toggles advantages normalization"""
-    clip_coef: float = 0.2
-    """the surrogate clipping coefficient"""
-    clip_vloss: bool = True
-    """Toggles whether or not to use a clipped loss for the value function"""
-    ent_coef: float = 0.01
-    """coefficient of the entropy"""
-    vf_coef: float = 0.5
-    """coefficient of the value function"""
-    max_grad_norm: float = 0.5
-    """the maximum norm for the gradient clipping"""
-    target_kl: float = None
-    """the target KL divergence threshold"""
-
-    # to be filled in runtime
-    batch_size: int = 0
-    """the batch size (computed in runtime)"""
-    minibatch_size: int = 0
-    """the mini-batch size (computed in runtime)"""
-    num_iterations: int = 0
-    """the number of iterations (computed in runtime)"""
-
-
-def make_env(env_id, idx, capture_video, run_name, gamma):
-    def thunk():
-        if capture_video and idx == 0:
-            env = RobotCorridorEnv(render_mode="rgb_array")
-            env = gym.wrappers.RecordVideo(env, f"videos/{run_name}")
-        else:
-            env = RobotCorridorEnv()
-        
-        env = gym.wrappers.RecordEpisodeStatistics(env)
-        env = gym.wrappers.ClipAction(env)
-        env = gym.wrappers.NormalizeObservation(env)
-        env = gym.wrappers.TransformObservation(env, lambda obs: np.clip(obs, -10, 10))
-        env = gym.wrappers.NormalizeReward(env, gamma=gamma)
-        env = gym.wrappers.TransformReward(env, lambda reward: np.clip(reward, -10, 10))
-        return env
-
-    return thunk
+from corridor_env import CorridorEnv
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-    torch.nn.init.orthogonal_(layer.weight, std)
-    torch.nn.init.constant_(layer.bias, bias_const)
+    nn.init.orthogonal_(layer.weight, std)
+    nn.init.constant_(layer.bias, bias_const)
     return layer
 
 
 class Agent(nn.Module):
-    def __init__(self, envs):
+    """Agent PPO avec CNN pour la grille + MLP pour l'état robot."""
+    
+    def __init__(self, obs_dim, act_dim):
         super().__init__()
-        obs_shape = np.array(envs.single_observation_space.shape).prod()
-        action_shape = np.prod(envs.single_action_space.shape)
         
-        # Critic network (value function)
-        self.critic = nn.Sequential(
-            layer_init(nn.Linear(obs_shape, 64)),
+        self.robot_dim = 6  # x, y, z, vx, vy, vz
+        self.grid_dim = obs_dim - self.robot_dim  # 192 (16x12 grid)
+        
+        # Encodeur état robot
+        self.robot_net = nn.Sequential(
+            layer_init(nn.Linear(self.robot_dim, 32)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
+            layer_init(nn.Linear(32, 32)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 1), std=1.0),
         )
         
-        # Actor network (policy)
-        self.actor_mean = nn.Sequential(
-            layer_init(nn.Linear(obs_shape, 64)),
+        # Encodeur grille (CNN pour 16x12)
+        self.grid_net = nn.Sequential(
+            nn.Conv2d(1, 16, kernel_size=3, stride=2, padding=1),  # 16x12 -> 8x6
+            nn.ReLU(),
+            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),  # 8x6 -> 4x3
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),  # 4x3 -> 4x3
+            nn.ReLU(),
+            nn.Flatten(),  # 64 * 4 * 3 = 768
+            layer_init(nn.Linear(768, 128)),
             nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, action_shape), std=0.01),
         )
         
-        # Learnable standard deviation for actions
-        self.actor_logstd = nn.Parameter(torch.zeros(1, action_shape))
-
-    def get_value(self, x):
-        return self.critic(x)
-
-    def get_action_and_value(self, x, action=None):
-        action_mean = self.actor_mean(x)
-        action_logstd = self.actor_logstd.expand_as(action_mean)
-        action_std = torch.exp(action_logstd)
-        probs = Normal(action_mean, action_std)
+        # Backbone commun (32 robot + 128 grid = 160)
+        self.backbone = nn.Sequential(
+            layer_init(nn.Linear(32 + 128, 128)),
+            nn.Tanh(),
+            layer_init(nn.Linear(128, 64)),
+            nn.Tanh(),
+        )
+        
+        # Têtes actor et critic
+        self.actor_mean = layer_init(nn.Linear(64, act_dim), std=0.01)
+        self.actor_logstd = nn.Parameter(torch.zeros(1, act_dim))
+        self.critic = layer_init(nn.Linear(64, 1), std=1.0)
+    
+    def forward(self, obs):
+        # Séparer robot et grille
+        robot = obs[:, :self.robot_dim]
+        grid = obs[:, self.robot_dim:].view(-1, 1, 16, 12)
+        
+        # Encoder
+        robot_feat = self.robot_net(robot)
+        grid_feat = self.grid_net(grid)
+        
+        # Combiner
+        combined = torch.cat([robot_feat, grid_feat], dim=1)
+        features = self.backbone(combined)
+        
+        return features
+    
+    def get_value(self, obs):
+        return self.critic(self.forward(obs))
+    
+    def get_action_and_value(self, obs, action=None):
+        features = self.forward(obs)
+        
+        mean = self.actor_mean(features)
+        std = self.actor_logstd.exp().expand_as(mean)
+        dist = Normal(mean, std)
+        
         if action is None:
-            action = probs.sample()
-        return action, probs.log_prob(action).sum(1), probs.entropy().sum(1), self.critic(x)
-
-
-if __name__ == "__main__":
-    args = tyro.cli(Args)
-    args.batch_size = int(args.num_envs * args.num_steps)
-    args.minibatch_size = int(args.batch_size // args.num_minibatches)
-    args.num_iterations = args.total_timesteps // args.batch_size
-    run_name = f"{args.env_id}__{args.exp_name}__{args.seed}__{int(time.time())}"
-    
-    if args.track:
-        import wandb
-        wandb.init(
-            project=args.wandb_project_name,
-            entity=args.wandb_entity,
-            sync_tensorboard=True,
-            config=vars(args),
-            name=run_name,
-            monitor_gym=True,
-            save_code=True,
+            action = dist.sample()
+        
+        return (
+            action,
+            dist.log_prob(action).sum(1),
+            dist.entropy().sum(1),
+            self.critic(features)
         )
-    
-    writer = SummaryWriter(f"runs/{run_name}")
-    writer.add_text(
-        "hyperparameters",
-        "|param|value|\n|-|-|\n%s" % ("\n".join([f"|{key}|{value}|" for key, value in vars(args).items()])),
-    )
 
-    # Seeding
+
+def make_env(corridor_xml):
+    def thunk():
+        env = CorridorEnv(corridor_xml=corridor_xml)
+        env = gym.wrappers.RecordEpisodeStatistics(env)
+        env = gym.wrappers.ClipAction(env)
+        return env
+    return thunk
+
+
+def train(args):
+    # Seed
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-    torch.backends.cudnn.deterministic = args.torch_deterministic
-
-    device = torch.device("cuda" if torch.cuda.is_available() and args.cuda else "cpu")
-    print(f"Using device: {device}")
-
-    # Environment setup
-    envs = gym.vector.SyncVectorEnv(
-        [make_env(args.env_id, i, args.capture_video, run_name, args.gamma) for i in range(args.num_envs)]
-    )
-    assert isinstance(envs.single_action_space, gym.spaces.Box), "only continuous action space is supported"
-
-    agent = Agent(envs).to(device)
-    optimizer = optim.Adam(agent.parameters(), lr=args.learning_rate, eps=1e-5)
-
-    # Storage setup
-    obs = torch.zeros((args.num_steps, args.num_envs) + envs.single_observation_space.shape).to(device)
-    actions = torch.zeros((args.num_steps, args.num_envs) + envs.single_action_space.shape).to(device)
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}")
+    
+    # Environnements parallèles
+    envs = gym.vector.AsyncVectorEnv([make_env(args.corridor) for _ in range(args.num_envs)])
+    
+    obs_dim = envs.single_observation_space.shape[0]
+    act_dim = envs.single_action_space.shape[0]
+    
+    # Agent
+    agent = Agent(obs_dim, act_dim).to(device)
+    optimizer = optim.Adam(agent.parameters(), lr=args.lr, eps=1e-5)
+    
+    # Calculs
+    batch_size = args.num_envs * args.num_steps
+    minibatch_size = batch_size // args.num_minibatches
+    num_iterations = args.total_timesteps // batch_size
+    
+    print(f"\n{'='*60}")
+    print(f"PPO Training - Robot Corridor")
+    print(f"{'='*60}")
+    print(f"Corridor: {args.corridor}")
+    print(f"Total timesteps: {args.total_timesteps:,}")
+    print(f"Batch size: {batch_size}")
+    print(f"Iterations: {num_iterations}")
+    print(f"{'='*60}\n")
+    
+    # Storage
+    obs = torch.zeros((args.num_steps, args.num_envs, obs_dim)).to(device)
+    actions = torch.zeros((args.num_steps, args.num_envs, act_dim)).to(device)
     logprobs = torch.zeros((args.num_steps, args.num_envs)).to(device)
     rewards = torch.zeros((args.num_steps, args.num_envs)).to(device)
     dones = torch.zeros((args.num_steps, args.num_envs)).to(device)
     values = torch.zeros((args.num_steps, args.num_envs)).to(device)
-
-    # Start training
+    
+    # Init
     global_step = 0
     start_time = time.time()
     next_obs, _ = envs.reset(seed=args.seed)
-    next_obs = torch.Tensor(next_obs).to(device)
+    next_obs = torch.tensor(next_obs, dtype=torch.float32).to(device)
     next_done = torch.zeros(args.num_envs).to(device)
+    
+    episode_returns = []
+    episode_distances = []
+    best_return = -float('inf')
+    best_distance = 0.0
+    successes = 0
+    total_episodes = 0
 
-    print(f"\nStarting training for {args.total_timesteps} timesteps...")
-    print(f"Iterations: {args.num_iterations}, Steps per iteration: {args.num_steps}")
-    print(f"Parallel environments: {args.num_envs}\n")
-
-    for iteration in range(1, args.num_iterations + 1):
-        # Annealing learning rate
-        if args.anneal_lr:
-            frac = 1.0 - (iteration - 1.0) / args.num_iterations
-            lrnow = frac * args.learning_rate
-            optimizer.param_groups[0]["lr"] = lrnow
-
-        for step in range(0, args.num_steps):
+    for iteration in range(1, num_iterations + 1):
+        # Collecte rollouts
+        for step in range(args.num_steps):
             global_step += args.num_envs
             obs[step] = next_obs
             dones[step] = next_done
-
-            # Get action from policy
+            
             with torch.no_grad():
                 action, logprob, _, value = agent.get_action_and_value(next_obs)
-                values[step] = value.flatten()
+            
             actions[step] = action
             logprobs[step] = logprob
-
-            # Execute action in environment
-            next_obs, reward, terminations, truncations, infos = envs.step(action.cpu().numpy())
-            next_done = np.logical_or(terminations, truncations)
-            rewards[step] = torch.tensor(reward).to(device).view(-1)
-            next_obs, next_done = torch.Tensor(next_obs).to(device), torch.Tensor(next_done).to(device)
-
-            # Log episode statistics
+            values[step] = value.flatten()
+            
+            next_obs, reward, term, trunc, infos = envs.step(action.cpu().numpy())
+            next_done = np.logical_or(term, trunc)
+            rewards[step] = torch.tensor(reward).to(device)
+            next_obs = torch.tensor(next_obs, dtype=torch.float32).to(device)
+            next_done = torch.tensor(next_done, dtype=torch.float32).to(device)
+            
+            # Log épisodes terminés
             if "final_info" in infos:
                 for info in infos["final_info"]:
                     if info and "episode" in info:
-                        print(f"global_step={global_step}, episodic_return={info['episode']['r']:.2f}, episodic_length={info['episode']['l']}")
-                        writer.add_scalar("charts/episodic_return", info["episode"]["r"], global_step)
-                        writer.add_scalar("charts/episodic_length", info["episode"]["l"], global_step)
+                        ret = info["episode"]["r"]
+                        dist = info.get("x", 0)
+                        reason = info.get("reason", "?")
                         
-                        # Log final position if available
-                        if 'x_position' in info:
-                            writer.add_scalar("charts/final_x_position", info['x_position'], global_step)
-
-        # Bootstrap value if not done
+                        episode_returns.append(ret)
+                        episode_distances.append(dist)
+                        total_episodes += 1
+                        
+                        if ret > best_return:
+                            best_return = ret
+                        if dist > best_distance:
+                            best_distance = dist
+                        if reason == "success":
+                            successes += 1
+        
+        # GAE
         with torch.no_grad():
-            next_value = agent.get_value(next_obs).reshape(1, -1)
+            next_value = agent.get_value(next_obs).flatten()
             advantages = torch.zeros_like(rewards).to(device)
-            lastgaelam = 0
+            lastgae = 0
             for t in reversed(range(args.num_steps)):
                 if t == args.num_steps - 1:
                     nextnonterminal = 1.0 - next_done
@@ -263,95 +217,114 @@ if __name__ == "__main__":
                     nextnonterminal = 1.0 - dones[t + 1]
                     nextvalues = values[t + 1]
                 delta = rewards[t] + args.gamma * nextvalues * nextnonterminal - values[t]
-                advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
+                advantages[t] = lastgae = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgae
             returns = advantages + values
-
-        # Flatten batch
-        b_obs = obs.reshape((-1,) + envs.single_observation_space.shape)
+        
+        # Flatten
+        b_obs = obs.reshape(-1, obs_dim)
+        b_actions = actions.reshape(-1, act_dim)
         b_logprobs = logprobs.reshape(-1)
-        b_actions = actions.reshape((-1,) + envs.single_action_space.shape)
         b_advantages = advantages.reshape(-1)
         b_returns = returns.reshape(-1)
         b_values = values.reshape(-1)
-
-        # Optimize policy and value network
-        b_inds = np.arange(args.batch_size)
-        clipfracs = []
-        for epoch in range(args.update_epochs):
+        
+        # Optimisation
+        b_inds = np.arange(batch_size)
+        for _ in range(args.update_epochs):
             np.random.shuffle(b_inds)
-            for start in range(0, args.batch_size, args.minibatch_size):
-                end = start + args.minibatch_size
+            for start in range(0, batch_size, minibatch_size):
+                end = start + minibatch_size
                 mb_inds = b_inds[start:end]
-
-                _, newlogprob, entropy, newvalue = agent.get_action_and_value(b_obs[mb_inds], b_actions[mb_inds])
+                
+                _, newlogprob, entropy, newvalue = agent.get_action_and_value(
+                    b_obs[mb_inds], b_actions[mb_inds]
+                )
+                
                 logratio = newlogprob - b_logprobs[mb_inds]
                 ratio = logratio.exp()
-
-                with torch.no_grad():
-                    old_approx_kl = (-logratio).mean()
-                    approx_kl = ((ratio - 1) - logratio).mean()
-                    clipfracs += [((ratio - 1.0).abs() > args.clip_coef).float().mean().item()]
-
-                mb_advantages = b_advantages[mb_inds]
-                if args.norm_adv:
-                    mb_advantages = (mb_advantages - mb_advantages.mean()) / (mb_advantages.std() + 1e-8)
-
+                
+                mb_adv = b_advantages[mb_inds]
+                mb_adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
+                
                 # Policy loss
-                pg_loss1 = -mb_advantages * ratio
-                pg_loss2 = -mb_advantages * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+                pg_loss1 = -mb_adv * ratio
+                pg_loss2 = -mb_adv * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
-
+                
                 # Value loss
                 newvalue = newvalue.view(-1)
-                if args.clip_vloss:
-                    v_loss_unclipped = (newvalue - b_returns[mb_inds]) ** 2
-                    v_clipped = b_values[mb_inds] + torch.clamp(
-                        newvalue - b_values[mb_inds],
-                        -args.clip_coef,
-                        args.clip_coef,
-                    )
-                    v_loss_clipped = (v_clipped - b_returns[mb_inds]) ** 2
-                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
-                    v_loss = 0.5 * v_loss_max.mean()
-                else:
-                    v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
-
-                entropy_loss = entropy.mean()
-                loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
-
+                v_loss = 0.5 * ((newvalue - b_returns[mb_inds]) ** 2).mean()
+                
+                # Entropy
+                ent_loss = entropy.mean()
+                
+                # Total loss
+                loss = pg_loss - args.ent_coef * ent_loss + args.vf_coef * v_loss
+                
                 optimizer.zero_grad()
                 loss.backward()
                 nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                 optimizer.step()
-
-            if args.target_kl is not None and approx_kl > args.target_kl:
-                break
-
-        y_pred, y_true = b_values.cpu().numpy(), b_returns.cpu().numpy()
-        var_y = np.var(y_true)
-        explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
-
-        # Log metrics
-        writer.add_scalar("charts/learning_rate", optimizer.param_groups[0]["lr"], global_step)
-        writer.add_scalar("losses/value_loss", v_loss.item(), global_step)
-        writer.add_scalar("losses/policy_loss", pg_loss.item(), global_step)
-        writer.add_scalar("losses/entropy", entropy_loss.item(), global_step)
-        writer.add_scalar("losses/old_approx_kl", old_approx_kl.item(), global_step)
-        writer.add_scalar("losses/approx_kl", approx_kl.item(), global_step)
-        writer.add_scalar("losses/clipfrac", np.mean(clipfracs), global_step)
-        writer.add_scalar("losses/explained_variance", explained_var, global_step)
         
-        sps = int(global_step / (time.time() - start_time))
-        print(f"Iteration {iteration}/{args.num_iterations}, SPS: {sps}")
-        writer.add_scalar("charts/SPS", sps, global_step)
-
-    # Save model
-    if args.save_model:
-        model_path = f"runs/{run_name}/{args.exp_name}.pth"
-        os.makedirs(os.path.dirname(model_path), exist_ok=True)
-        torch.save(agent.state_dict(), model_path)
-        print(f"\nModel saved to {model_path}")
-
+        # Stats itération
+        if iteration % 2 == 0:
+            elapsed = time.time() - start_time
+            sps = int(global_step / elapsed)
+            
+            print(f"\n{'='*70}")
+            print(f"ITERATION {iteration}/{num_iterations} | Steps: {global_step:,} | SPS: {sps} | Time: {elapsed:.0f}s")
+            print(f"{'='*70}")
+            
+            if episode_returns:
+                recent_ret = episode_returns[-50:] if len(episode_returns) >= 50 else episode_returns
+                recent_dist = episode_distances[-50:] if len(episode_distances) >= 50 else episode_distances
+                
+                print(f"Episodes: {total_episodes} | Succès: {successes} ({100*successes/max(1,total_episodes):.1f}%)")
+                print(f"Return   - Recent: {np.mean(recent_ret):>7.1f} ± {np.std(recent_ret):>5.1f} | Best: {best_return:>7.1f}")
+                print(f"Distance - Recent: {np.mean(recent_dist):>7.1f}m ± {np.std(recent_dist):>5.1f}m | Best: {best_distance:>7.1f}m")
+            print(f"{'='*70}\n")
+    
+    # Sauvegarder
+    os.makedirs("models", exist_ok=True)
+    model_path = f"models/ppo_corridor_{int(time.time())}.pth"
+    torch.save(agent.state_dict(), model_path)
+    
+    # Résumé final
+    elapsed = time.time() - start_time
+    print(f"\n{'='*70}")
+    print(f"ENTRAÎNEMENT TERMINÉ")
+    print(f"{'='*70}")
+    print(f"Durée totale: {elapsed/60:.1f} minutes")
+    print(f"Episodes joués: {total_episodes}")
+    print(f"Succès (100m): {successes} ({100*successes/max(1,total_episodes):.1f}%)")
+    print(f"Meilleur return: {best_return:.1f}")
+    print(f"Meilleure distance: {best_distance:.1f}m")
+    if episode_returns:
+        print(f"Return moyen (derniers 100): {np.mean(episode_returns[-100:]):.1f}")
+        print(f"Distance moyenne (derniers 100): {np.mean(episode_distances[-100:]):.1f}m")
+    print(f"Modèle sauvegardé: {model_path}")
+    print(f"{'='*70}\n")
+    
     envs.close()
-    writer.close()
-    print("\nTraining complete!")
+    return model_path
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--corridor", type=str, default="corridor_3x100.xml")
+    parser.add_argument("--total-timesteps", type=int, default=2_000_000)
+    parser.add_argument("--num-envs", type=int, default=16)
+    parser.add_argument("--num-steps", type=int, default=2048)
+    parser.add_argument("--num-minibatches", type=int, default=32)
+    parser.add_argument("--update-epochs", type=int, default=10)
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--gamma", type=float, default=0.99)
+    parser.add_argument("--gae-lambda", type=float, default=0.95)
+    parser.add_argument("--clip-coef", type=float, default=0.2)
+    parser.add_argument("--ent-coef", type=float, default=0.01)
+    parser.add_argument("--vf-coef", type=float, default=0.5)
+    parser.add_argument("--max-grad-norm", type=float, default=0.5)
+    parser.add_argument("--seed", type=int, default=1)
+    args = parser.parse_args()
+    
+    train(args)

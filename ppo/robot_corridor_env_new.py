@@ -48,18 +48,18 @@ class RobotCorridorEnv(gym.Env):
         self.cell_width = 0.25  # Smaller cells for higher resolution
         self.render_mode = render_mode
         
-        # Floor observation parameters (from notebook Question 7)
-        self.n_rows_ahead = 8      # Look 8 rows ahead (2m with 0.25m cells)
-        self.n_rows_behind = 1     # Look 1 row behind
+        # Floor observation parameters - INCREASED VISION for better planning
+        self.n_rows_ahead = 16     # Look 16 rows ahead (4m with 0.25m cells)
+        self.n_rows_behind = 6     # Look 6 rows behind (1.5m with 0.25m cells)
         self.n_cols = 12           # 12 cells per row (3m / 0.25m)
-        self.n_observation_rows = self.n_rows_behind + 1 + self.n_rows_ahead  # 10 rows
+        self.n_observation_rows = self.n_rows_behind + 1 + self.n_rows_ahead  # 23 rows
         
         # Build cell map after model is loaded
         self.cell_map_semantic = self._build_cell_map()
         
-        # Observation space: [x, y, z, vx, vy, vz] + floor grid (10 rows × 12 cols = 120 cells)
-        # Total: 6 + 120 = 126 values
-        obs_size = 6 + (self.n_observation_rows * self.n_cols)
+        # Observation space: [x, y, z, vx, vy, vz] + wheel_cells(4) + floor grid (23 rows × 12 cols = 276 cells)
+        # Total: 6 + 4 + 276 = 286 values
+        obs_size = 6 + 4 + (self.n_observation_rows * self.n_cols)
         self.observation_space = spaces.Box(
             low=-10.0,
             high=110.0,
@@ -67,13 +67,11 @@ class RobotCorridorEnv(gym.Env):
             dtype=np.float32
         )
         
-        # Action space: [forward_speed, turn_rate] in [-1, 1]
-        # forward_speed: -1 = full backward, 0 = stop, +1 = full forward
-        # turn_rate: -1 = full left, 0 = straight, +1 = full right
+        # Action space: 4 wheel torques in [-1, 1] - raw control (same as basic_control)
         self.action_space = spaces.Box(
             low=-1.0,
             high=1.0,
-            shape=(2,),
+            shape=(4,),
             dtype=np.float32
         )
         
@@ -112,31 +110,9 @@ class RobotCorridorEnv(gym.Env):
     
     def step(self, action):
         """Execute one step in the environment."""
-        # Convert high-level actions [forward_speed, turn_rate] to wheel speeds
-        forward_speed = np.clip(action[0], -1.0, 1.0)  # -1 to 1
-        turn_rate = np.clip(action[1], -1.0, 1.0)      # -1 to 1
-        
-        # Scale to actual speeds (like in simulation.py)
-        linear_speed = 15.0  # Max forward/backward speed
-        turn_speed = 12.0    # Max turning differential
-        
-        # Calculate base speed and turn differential
-        base_speed = forward_speed * linear_speed
-        turn_diff = turn_rate * turn_speed
-        
-        # Apply differential steering (like simulation.py)
-        # Left wheels get (base_speed - turn_diff)
-        # Right wheels get (base_speed + turn_diff)
-        w_fl = base_speed - turn_diff  # Front left
-        w_fr = base_speed + turn_diff  # Front right  
-        w_rl = base_speed - turn_diff  # Rear left
-        w_rr = base_speed + turn_diff  # Rear right
-        
-        # Apply to MuJoCo
-        self.data.ctrl[0] = w_fl
-        self.data.ctrl[1] = w_fr
-        self.data.ctrl[2] = w_rl
-        self.data.ctrl[3] = w_rr
+        # Apply raw wheel torques (same as basic_control) - NO conversion
+        action = np.clip(action, -1.0, 1.0) * 20.0  # Scale to [-20, 20] Nm (same as basic_control)
+        self.data.ctrl[:] = action
         
         # Step simulation (2 substeps - balance between speed and stability)
         for _ in range(2):
@@ -159,18 +135,21 @@ class RobotCorridorEnv(gym.Env):
         return observation, reward, terminated, truncated, info
     
     def _get_obs(self):
-        """Get current observation (CORRECTED: includes floor observation)."""
+        """Get current observation with wheel ground contact info."""
         # Position and velocity
         pos = self.data.qpos[:3]  # x, y, z
         vel = self.data.qvel[:3]  # vx, vy, vz
         
+        # Wheel ground contact (what's under each wheel)
+        wheel_cells = self._get_wheel_ground_contact(pos[0], pos[1])  # 4 values
+        
         # Floor observation (grid of cells around robot)
         robot_x, robot_y = pos[0], pos[1]
         floor_obs = self._get_floor_observation(robot_x, robot_y)
-        floor_flat = floor_obs.flatten()  # Flatten 4x6 grid to 24 values
+        floor_flat = floor_obs.flatten()  # Flatten 19x12 grid to 228 values
         
-        # Combine: [x, y, z, vx, vy, vz, floor_cells...]
-        obs = np.concatenate([pos, vel, floor_flat]).astype(np.float32)
+        # Combine: [x, y, z, vx, vy, vz, wheel_cells(4), floor_cells(228)...]
+        obs = np.concatenate([pos, vel, wheel_cells, floor_flat]).astype(np.float32)
         return obs
     
     def _get_floor_observation(self, robot_x, robot_y):
@@ -202,11 +181,58 @@ class RobotCorridorEnv(gym.Env):
             actual_row = robot_row + row_offset
             
             for j in range(self.n_cols):
-                # Get cell type from semantic map
-                cell_type = self.cell_map_semantic.get((actual_row, j), 0)
-                observation[i, j] = cell_type if cell_type is not None else 0
+                # Get cell type from semantic map (default to hole if not found)
+                cell_type = self.cell_map_semantic.get((actual_row, j), 2)  # Default to hole, not flat!
+                observation[i, j] = cell_type
         
         return observation
+    
+    def _get_wheel_ground_contact(self, robot_x, robot_y):
+        """
+        Get the cell type under each of the 4 wheels.
+        
+        Returns array of 4 values (one per wheel):
+        - 0 = flat ground
+        - 1 = ramp/bridge  
+        - 2 = hole (danger!)
+        - 3 = bump/obstacle
+        """
+        # Get robot orientation
+        quat = self.data.qpos[3:7]  # w, x, y, z
+        robot_heading = np.arctan2(2*(quat[0]*quat[3] + quat[1]*quat[2]), 
+                                 1 - 2*(quat[2]**2 + quat[3]**2))
+        
+        # Robot dimensions (from four_wheels_robot.xml)
+        wheelbase = 0.70  # Distance between front and rear wheels (0.35 - (-0.35))
+        track_width = 0.60  # Distance between left and right wheels (0.30 - (-0.30))
+        
+        # Calculate wheel positions relative to robot center
+        cos_h = np.cos(robot_heading)
+        sin_h = np.sin(robot_heading)
+        
+        # Wheel offsets in robot frame (front-left, front-right, rear-left, rear-right)
+        wheel_offsets = [
+            (wheelbase/2, -track_width/2),   # Front-left
+            (wheelbase/2, track_width/2),    # Front-right  
+            (-wheelbase/2, -track_width/2),  # Rear-left
+            (-wheelbase/2, track_width/2),   # Rear-right
+        ]
+        
+        wheel_cells = []
+        for offset_x, offset_y in wheel_offsets:
+            # Transform to world coordinates
+            world_x = robot_x + offset_x * cos_h - offset_y * sin_h
+            world_y = robot_y + offset_x * sin_h + offset_y * cos_h
+            
+            # Convert to grid coordinates
+            wheel_row = int(world_x / self.cell_width)
+            wheel_col = int((world_y + self.corridor_width/2) / self.cell_width)
+            
+            # Get cell type (default to hole if out of bounds)
+            cell_type = self.cell_map_semantic.get((wheel_row, wheel_col), 2)
+            wheel_cells.append(cell_type)
+        
+        return np.array(wheel_cells, dtype=np.float32)
     
     def _build_cell_map(self):
         """
@@ -214,8 +240,8 @@ class RobotCorridorEnv(gym.Env):
         Maps (row, col) -> cell_type (0=flat, 1=bump, 2=hole).
         """
         cell_map = {}
-        n_x = int(self.corridor_length / self.cell_width)  # 200 rows
-        n_y = self.n_cols  # 6 columns
+        n_x = int(self.corridor_length / self.cell_width)  # 400 rows (100m / 0.25m)
+        n_y = self.n_cols  # 12 columns (3m / 0.25m)
         half_width = self.corridor_width / 2.0
         
         # Initialize all cells as holes (2) - zones without geometry are holes
@@ -297,6 +323,12 @@ class RobotCorridorEnv(gym.Env):
         robot_y = self.data.qpos[1]
         robot_z = self.data.qpos[2]
         robot_vx = self.data.qvel[0]  # Forward velocity
+        robot_vy = self.data.qvel[1]  # Lateral velocity
+        
+        # Get robot orientation (quaternion to heading)
+        quat = self.data.qpos[3:7]  # w, x, y, z
+        robot_heading = np.arctan2(2*(quat[0]*quat[3] + quat[1]*quat[2]), 
+                                 1 - 2*(quat[2]**2 + quat[3]**2))
         
         terminated = False
         info = {}
@@ -304,7 +336,7 @@ class RobotCorridorEnv(gym.Env):
         # Terminal conditions
         if robot_x >= self.corridor_length:
             # Success: reached goal
-            reward = 100.0
+            reward = 200.0  # Increased success reward
             terminated = True
             info['termination_reason'] = 'success'
             print(f"[TERM] SUCCESS at step {self.current_step}: x={robot_x:.2f}")
@@ -320,44 +352,60 @@ class RobotCorridorEnv(gym.Env):
             terminated = True
             info['termination_reason'] = 'backward'
             print(f"[TERM] BACKWARD at step {self.current_step}: x={robot_x:.2f}")
+        elif self._is_robot_flipped():
+            # Robot flipped over (upside down)
+            reward = -50.0
+            terminated = True
+            info['termination_reason'] = 'flipped'
+            print(f"[TERM] ROBOT FLIPPED at step {self.current_step}")
+
         else:
             # Progress reward: encourage forward movement
             delta_x = robot_x - self.previous_x
             self.previous_x = robot_x
             
-            # Detect brutal deceleration (sign of getting stuck/blocked)
-            delta_vx = robot_vx - self.previous_vx
-            self.previous_vx = robot_vx
-            
-            # Check if on a ramp
+            # Get current cell type
             robot_row = int(robot_x / self.cell_width)
             robot_col = int((robot_y + self.corridor_width/2) / self.cell_width)
             cell_type = self.cell_map_semantic.get((robot_row, robot_col), 2)
             
-            # DOUBLE progress reward when on ramp to encourage CROSSING it
-            if cell_type == 1:  # On a ramp
-                reward = delta_x * 20.0  # 2x progress reward - encourages crossing fast
-            else:
-                reward = delta_x * 10.0  # Normal progress reward
+            # SIMPLE REWARD: Only forward progress, no cheating
+            progress_reward = delta_x * 10.0  # Same reward everywhere
             
-            # Penalty for being stuck (stronger on ramps)
-            if abs(robot_vx) < 0.1:  # If moving very slowly
-                if cell_type == 1:  # Stuck on ramp is worse
-                    reward -= 2.0  # Strong penalty - don't stay on ramp!
-                else:
-                    reward -= 0.5  # Normal stuck penalty
+            # Penalty for being stuck (universal)
+            stuck_penalty = 0.0
+            if abs(robot_vx) < 0.05:  # Really not moving
+                stuck_penalty = -0.5
             
-            # Penalty for brutal deceleration (getting stuck on obstacles)
-            if delta_vx < -0.5 and self.current_step > 10:  # Avoid initial spawn effects
-                reward -= 3.0  # Big penalty for sudden slowdown
-                print(f"[DECEL] Brutal deceleration at step {self.current_step}: vx={robot_vx:.2f}, delta_vx={delta_vx:.2f}")
+            # Time penalty (encourage efficiency)
+            time_penalty = -0.01
             
-            # Small penalty for time (encourage efficiency)
-            reward -= 0.01
+            # TOTAL REWARD (minimal, let robot learn naturally)
+            reward = progress_reward + stuck_penalty + time_penalty
             
+            # Debug info
             info['termination_reason'] = None
+            info['progress_reward'] = progress_reward
+            info['cell_type'] = cell_type
+            info['robot_heading'] = np.degrees(robot_heading)
         
         return reward, terminated, info
+    
+    def _is_robot_flipped(self):
+        """Check if robot has flipped over (upside down)."""
+        # Get robot orientation quaternion
+        quat = self.data.qpos[3:7]  # w, x, y, z
+        
+        # Convert quaternion to rotation matrix to get up vector
+        # Up vector should point in +Z direction when robot is upright
+        w, x, y, z = quat
+        
+        # Calculate the Z component of the robot's up vector
+        # For a quaternion, the up vector's Z component is: 1 - 2*(x² + y²)
+        up_z = 1 - 2 * (x*x + y*y)
+        
+        # If up_z < 0, the robot is more upside down than upright
+        return up_z < -0.1  # Small tolerance for slight tilting
     
     def render(self):
         """Render the environment."""

@@ -24,35 +24,53 @@ class Agent(nn.Module):
         obs_shape = np.array(envs.single_observation_space.shape).prod()
         action_shape = np.prod(envs.single_action_space.shape)
         
-        # Separate robot state (6 values) from grid observation (120 values)
+        # Separate robot state (6 values) + wheel contact (4 values) from grid observation (276 values)
         self.robot_state_size = 6  # x, y, z, vx, vy, vz
-        self.grid_size = obs_shape - self.robot_state_size  # 10x12 = 120 grid cells
+        self.wheel_contact_size = 4  # cell type under each wheel
+        self.grid_size = obs_shape - self.robot_state_size - self.wheel_contact_size  # 23x12 = 276 grid cells
         
-        # Robot state encoder (position + velocity)
+        # Robot state encoder (position + velocity + wheel contact)
+        combined_robot_size = self.robot_state_size + self.wheel_contact_size  # 6 + 4 = 10
         self.robot_encoder = nn.Sequential(
-            layer_init(nn.Linear(self.robot_state_size, 32)),
+            layer_init(nn.Linear(combined_robot_size, 32)),
             nn.ReLU(),
             layer_init(nn.Linear(32, 32)),
             nn.ReLU(),
         )
         
-        # Grid encoder (spatial awareness) - CNN for spatial patterns
-        # Reshape 120 values to 10x12 spatial grid
+        # IMPROVED Grid encoder - preserves spatial relationships
+        # No pooling to keep precise spatial information
         self.grid_conv = nn.Sequential(
-            # Input: 1 channel, 10x12 grid
-            nn.Conv2d(1, 16, kernel_size=3, padding=1),  # 16x10x12
+            # First conv layer - detect basic patterns
+            nn.Conv2d(1, 16, kernel_size=3, padding=1),  # 19x12 -> 19x12
             nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=3, padding=1), # 32x10x12
+            # Second conv layer - detect relationships
+            nn.Conv2d(16, 32, kernel_size=3, padding=1), # 19x12 -> 19x12
             nn.ReLU(),
-            nn.MaxPool2d(2, 2),                          # 32x5x6
-            nn.Conv2d(32, 64, kernel_size=3, padding=1), # 64x5x6
+            # Third conv layer - higher level patterns (NO POOLING)
+            nn.Conv2d(32, 16, kernel_size=3, padding=1), # 19x12 -> 19x12
             nn.ReLU(),
-            nn.AdaptiveAvgPool2d((2, 3)),                # 64x2x3 = 384 features
-            nn.Flatten(),                                # 384
+            # Keep spatial structure: 16 channels × 23×12 = 4416 features
+            nn.Flatten(),
         )
         
+        # Positional encoding - add explicit position information
+        self.pos_encoding = nn.Parameter(torch.randn(1, 23, 12) * 0.1)
+        
+        # Spatial attention - learn which areas are important
+        self.spatial_attention = nn.Sequential(
+            nn.Conv2d(2, 8, kernel_size=1),   # 1 grid + 1 position -> 8
+            nn.ReLU(),
+            nn.Conv2d(8, 1, kernel_size=1),   # -> 1 attention map
+            nn.Sigmoid()
+        )
+        
+        # Grid encoder with spatial awareness
         self.grid_encoder = nn.Sequential(
-            layer_init(nn.Linear(384, 128)),
+            layer_init(nn.Linear(4416, 256)),  # 16 channels × 23×12 = 4416 features
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            layer_init(nn.Linear(256, 128)),
             nn.ReLU(),
             layer_init(nn.Linear(128, 64)),
             nn.ReLU(),
@@ -60,18 +78,30 @@ class Agent(nn.Module):
             nn.ReLU(),
         )
         
-        # Combined features
+        # Combined features (spatial processing)
         combined_size = 32 + 32  # robot_encoder + grid_encoder
         
-        # Shared backbone
-        self.backbone = nn.Sequential(
+        # Spatial feature combiner
+        self.spatial_combiner = nn.Sequential(
             layer_init(nn.Linear(combined_size, 128)),
             nn.ReLU(),
-            layer_init(nn.Linear(128, 128)),
-            nn.ReLU(),
-            nn.Dropout(0.1),  # Regularization
             layer_init(nn.Linear(128, 64)),
             nn.ReLU(),
+        )
+        
+        # LSTM for temporal memory
+        self.lstm_hidden_size = 128
+        self.lstm = nn.LSTM(64, self.lstm_hidden_size, batch_first=True)
+        
+        # Initialize LSTM hidden states
+        self.register_buffer("lstm_h", torch.zeros(1, 1, self.lstm_hidden_size))
+        self.register_buffer("lstm_c", torch.zeros(1, 1, self.lstm_hidden_size))
+        
+        # Final processing after LSTM
+        self.post_lstm = nn.Sequential(
+            layer_init(nn.Linear(self.lstm_hidden_size, 64)),
+            nn.ReLU(),
+            nn.Dropout(0.1),
         )
         
         # Critic head (value function)
@@ -81,44 +111,84 @@ class Agent(nn.Module):
             layer_init(nn.Linear(32, 1), std=1.0),
         )
         
-        # Actor head (policy)
+        # Actor head (policy) - COMPATIBLE with behavioral cloning
         self.actor_mean = nn.Sequential(
-            layer_init(nn.Linear(64, 32)),
+            layer_init(nn.Linear(64, 64)),  # Match BC architecture
             nn.ReLU(),
-            layer_init(nn.Linear(32, action_shape), std=0.01),
+            layer_init(nn.Linear(64, action_shape), std=0.01),  # 64->4 like BC
         )
         
         self.actor_logstd = nn.Parameter(torch.zeros(1, action_shape))
 
-    def forward(self, x):
+    def forward(self, x, lstm_state=None):
         batch_size = x.shape[0]
         
-        # Split observation into robot state and grid
+        # Split observation into robot state, wheel contact, and grid
         robot_state = x[:, :self.robot_state_size]  # First 6 values
-        grid_obs = x[:, self.robot_state_size:]     # Remaining 120 values
+        wheel_contact = x[:, self.robot_state_size:self.robot_state_size + self.wheel_contact_size]  # Next 4 values
+        grid_obs = x[:, self.robot_state_size + self.wheel_contact_size:]  # Remaining 276 values
         
-        # Encode robot state
-        robot_features = self.robot_encoder(robot_state)
+        # Combine robot state with wheel contact info
+        combined_robot_state = torch.cat([robot_state, wheel_contact], dim=1)
         
-        # Reshape grid to 2D spatial format and process with CNN
-        grid_2d = grid_obs.view(batch_size, 1, 10, 12)  # Batch x 1 x 10 x 12
-        grid_conv_features = self.grid_conv(grid_2d)     # Extract spatial features
-        grid_features = self.grid_encoder(grid_conv_features)  # Final encoding
+        # Encode robot state (including wheel contact)
+        robot_features = self.robot_encoder(combined_robot_state)
         
-        # Combine features
+        # Reshape grid to 2D spatial format
+        grid_2d = grid_obs.view(batch_size, 1, 23, 12)  # Batch x 1 x 23 x 12
+        
+        # Add positional encoding (robot position awareness)
+        pos_encoded = grid_2d + self.pos_encoding.unsqueeze(0)  # Add position info
+        
+        # Combine grid with position for attention (need to add channel dimension to pos_encoding)
+        pos_expanded = self.pos_encoding.unsqueeze(0).expand(batch_size, -1, -1, -1)  # Batch x 1 x 23 x 12
+        grid_with_pos = torch.cat([grid_2d, pos_expanded], dim=1)  # Batch x 2 x 23 x 12
+        
+        # Compute spatial attention (where to focus)
+        attention_map = self.spatial_attention(grid_with_pos)  # Batch x 1 x 23 x 12
+        
+        # Apply attention to position-encoded grid
+        attended_grid = pos_encoded * attention_map
+        
+        # Process with CNN (preserves spatial structure)
+        grid_conv_features = self.grid_conv(attended_grid)  # Batch x 4416
+        
+        # Final encoding
+        grid_features = self.grid_encoder(grid_conv_features)
+        
+        # Combine spatial features
         combined = torch.cat([robot_features, grid_features], dim=1)
+        spatial_features = self.spatial_combiner(combined)  # Batch x 64
         
-        # Shared processing
-        features = self.backbone(combined)
+        # LSTM for temporal processing
+        if lstm_state is None:
+            # Create fresh LSTM states for this batch
+            device = spatial_features.device
+            lstm_h = torch.zeros(1, batch_size, self.lstm_hidden_size, device=device)
+            lstm_c = torch.zeros(1, batch_size, self.lstm_hidden_size, device=device)
+        else:
+            lstm_h, lstm_c = lstm_state
         
-        return features
+        # Add sequence dimension for LSTM
+        spatial_features_seq = spatial_features.unsqueeze(1)  # Batch x 1 x 64
+        
+        # LSTM forward pass
+        lstm_out, (new_h, new_c) = self.lstm(spatial_features_seq, (lstm_h, lstm_c))
+        
+        # Remove sequence dimension
+        lstm_features = lstm_out.squeeze(1)  # Batch x 128
+        
+        # Final processing
+        features = self.post_lstm(lstm_features)  # Batch x 64
+        
+        return features, (new_h, new_c)
 
-    def get_value(self, x):
-        features = self.forward(x)
+    def get_value(self, x, lstm_state=None):
+        features, new_lstm_state = self.forward(x, lstm_state)
         return self.critic(features)
 
-    def get_action_and_value(self, x, action=None):
-        features = self.forward(x)
+    def get_action_and_value(self, x, action=None, lstm_state=None):
+        features, new_lstm_state = self.forward(x, lstm_state)
         
         action_mean = self.actor_mean(features)
         action_logstd = self.actor_logstd.expand_as(action_mean)
@@ -126,7 +196,14 @@ class Agent(nn.Module):
         probs = torch.distributions.Normal(action_mean, action_std)
         if action is None:
             action = probs.sample()
-        return action, probs.log_prob(action).sum(1), probs.entropy().sum(1), self.critic(features)
+        return action, probs.log_prob(action).sum(1), probs.entropy().sum(1), self.critic(features), new_lstm_state
+    
+    def reset_lstm_state(self, batch_size=1):
+        """Reset LSTM hidden states (call at episode start)."""
+        device = next(self.parameters()).device
+        self.lstm_h = torch.zeros(1, batch_size, self.lstm_hidden_size, device=device)
+        self.lstm_c = torch.zeros(1, batch_size, self.lstm_hidden_size, device=device)
+        return (self.lstm_h, self.lstm_c)
 
 
 def test_agent(model_path, num_episodes=10, render=False, corridor_xml="corridor_3x100.xml"):
@@ -148,7 +225,17 @@ def test_agent(model_path, num_episodes=10, render=False, corridor_xml="corridor
     # Load agent
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     agent = Agent(dummy_env).to(device)
-    agent.load_state_dict(torch.load(model_path, map_location=device))
+    
+    # Load state dict but ignore LSTM buffer size mismatches
+    checkpoint = torch.load(model_path, map_location=device)
+    
+    # Remove LSTM buffers from checkpoint (they have wrong size for testing)
+    if 'lstm_h' in checkpoint:
+        del checkpoint['lstm_h']
+    if 'lstm_c' in checkpoint:
+        del checkpoint['lstm_c']
+    
+    agent.load_state_dict(checkpoint, strict=False)
     agent.eval()
     
     print(f"Testing agent from {model_path}")
@@ -181,13 +268,16 @@ def test_agent(model_path, num_episodes=10, render=False, corridor_xml="corridor
                 episode_return = 0
                 episode_length = 0
                 
+                # Reset LSTM state for new episode
+                lstm_state = agent.reset_lstm_state(1)
+                
                 print(f"\nEpisode {episode + 1} starting...")
                 
                 while not done and v.is_running():
-                    # Get action from policy
+                    # Get action from policy with LSTM
                     with torch.no_grad():
                         obs_tensor = torch.Tensor(obs).unsqueeze(0).to(device)
-                        action, _, _, _ = agent.get_action_and_value(obs_tensor)
+                        action, _, _, _, lstm_state = agent.get_action_and_value(obs_tensor, lstm_state=lstm_state)
                         action = action.cpu().numpy()[0]
                     
                     # Step environment
@@ -227,11 +317,14 @@ def test_agent(model_path, num_episodes=10, render=False, corridor_xml="corridor
             episode_return = 0
             episode_length = 0
             
+            # Reset LSTM state for new episode
+            lstm_state = agent.reset_lstm_state(1)
+            
             while not done:
-                # Get action from policy
+                # Get action from policy with LSTM
                 with torch.no_grad():
                     obs_tensor = torch.Tensor(obs).unsqueeze(0).to(device)
-                    action, _, _, _ = agent.get_action_and_value(obs_tensor)
+                    action, _, _, _, lstm_state = agent.get_action_and_value(obs_tensor, lstm_state=lstm_state)
                     action = action.cpu().numpy()[0]
                 
                 # Step environment
@@ -282,6 +375,7 @@ def test_agent(model_path, num_episodes=10, render=False, corridor_xml="corridor
 if __name__ == "__main__":
     import argparse
     import glob
+    import os
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-path", type=str, default=None, help="Path to trained model (auto-finds latest if not provided)")
@@ -294,16 +388,27 @@ if __name__ == "__main__":
     # Auto-find latest model if not provided
     model_path = args.model_path
     if model_path is None:
-        # Search for models in models/ppo_robot_corridor_*/ppo_robot_corridor.pth
-        model_files = glob.glob("models/ppo_robot_corridor_*/ppo_robot_corridor.pth")
-        if not model_files:
-            print("ERROR: No trained models found in models/ppo_robot_corridor_*/")
-            print("Please train a model first using train_ppo_simple.py")
+        # Search for all PPO models (including pretrained ones)
+        model_patterns = [
+            "models/ppo_robot_corridor_pretrained_*/ppo_robot_corridor_pretrained.pth",
+            "models/ppo_robot_corridor_*/ppo_robot_corridor.pth"
+        ]
+        
+        all_models = []
+        for pattern in model_patterns:
+            all_models.extend(glob.glob(pattern))
+        
+        if not all_models:
+            print("ERROR: No trained models found!")
+            print("Searched for:")
+            for pattern in model_patterns:
+                print(f"  {pattern}")
+            print("Please train a model first.")
             exit(1)
         
-        # Sort by timestamp (embedded in directory name) and take the latest
-        model_files.sort(reverse=True)
-        model_path = model_files[0]
+        # Sort by modification time and take the latest
+        all_models.sort(key=lambda x: os.path.getmtime(x), reverse=True)
+        model_path = all_models[0]
         print(f"Auto-detected latest model: {model_path}\n")
     
     test_agent(model_path, args.episodes, args.render, args.corridor)
