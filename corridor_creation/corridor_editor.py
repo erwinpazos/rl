@@ -59,6 +59,8 @@ class CorridorEditor:
         
         self.bump_height_var = tk.StringVar(master)
         self.bump_height_var.set(BUMP_KEYS[0])
+        
+        self.walls_enabled = tk.BooleanVar(master, value=True)
 
         self.create_main_interface()
         
@@ -229,6 +231,15 @@ class CorridorEditor:
                                         width=18,
                                         style='Modern.TCombobox')
         self.bump_menu.pack(side=tk.LEFT)
+        
+        # Options section
+        options_frame = ttk.LabelFrame(self.toolbar, text="Options", padding=15)
+        options_frame.pack(side=tk.LEFT, padx=(15, 0), fill=tk.Y)
+        
+        self.walls_checkbox = ttk.Checkbutton(options_frame,
+                                               text="Generate walls",
+                                               variable=self.walls_enabled)
+        self.walls_checkbox.pack(side=tk.LEFT)
         
         self.set_tool("flat")
 
@@ -646,6 +657,15 @@ class CorridorEditor:
             HALF_SIZE_GRID_XY = CELL_SIZE / 2.0 
 
             bump_half_z_to_key = {settings["half_z"]: key for key, settings in BUMP_SETTINGS.items()}
+            
+            # Detect if walls are present
+            has_walls = False
+            for geom in root.findall('./worldbody/geom'):
+                name = geom.get('name', '')
+                if name.startswith('wall_'):
+                    has_walls = True
+                    break
+            self.walls_enabled.set(has_walls)
 
             for geom in root.findall('./worldbody/geom'):
                 name = geom.get('name', '')
@@ -718,7 +738,11 @@ class CorridorEditor:
     <light name="key_light" pos="4 4 4" dir="-1 -1 -1" directional="true" diffuse="1.1 1.1 1.1" specular="0.4 0.4 0.4" castshadow="true" />
     <light name="fill_light" pos="-6 4 2" dir="1 -0.5 -1" directional="true" ambient="0.4 0.4 0.4" diffuse="0.6 0.6 0.6" specular="0.2 0.2 0.2" castshadow="false" />
 
-    <geom name="wall_left" type="box" size="{CORRIDOR_LENGTH_M/2:.3f} 0.025 4.000" pos="{CORRIDOR_LENGTH_M/2:.3f} {-CORRIDOR_WIDTH_M/2 - 0.025:.3f} 4.000" material="mat_wall" />
+"""
+        
+        # Add walls only if enabled
+        if self.walls_enabled.get():
+            xml_template_start += f"""    <geom name="wall_left" type="box" size="{CORRIDOR_LENGTH_M/2:.3f} 0.025 4.000" pos="{CORRIDOR_LENGTH_M/2:.3f} {-CORRIDOR_WIDTH_M/2 - 0.025:.3f} 4.000" material="mat_wall" />
     <geom name="wall_right" type="box" size="{CORRIDOR_LENGTH_M/2:.3f} 0.025 4.000" pos="{CORRIDOR_LENGTH_M/2:.3f} {CORRIDOR_WIDTH_M/2 + 0.025:.3f} 4.000" material="mat_wall" />
 
     """

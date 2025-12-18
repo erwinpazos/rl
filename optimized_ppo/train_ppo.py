@@ -30,11 +30,11 @@ class Agent(nn.Module):
     def __init__(self, obs_dim, act_dim):
         super().__init__()
         
-        # Observation: pos(3) + vel(3) + bbox(8) + history(40) + grid(7200) = 7254
+        # Observation: pos(3) + vel(3) + bbox(8) + history(88) + grid(1800) = 1902
         self.robot_state_dim = 6   # pos(3) + vel(3)
         self.bbox_dim = 8          # 4 coins × 2 coords
-        self.history_dim = 40      # 5 positions × 8 coords (4 coins × 2) = 40
-        self.grid_dim = 7200       # 120×60 = 7200
+        self.history_dim = 88      # 8 frames × 11 valeurs (8 coins + 3 vitesses) = 88
+        self.grid_dim = 1800       # 60×30 = 1800
         
         # MLP pour état robot (position + vitesse)
         self.robot_net = nn.Sequential(
@@ -44,55 +44,54 @@ class Agent(nn.Module):
             nn.Tanh(),
         )
         
-        # MLP pour historique des 4 coins (anticipation)
+        # MLP pour historique des positions + vitesses (anticipation)
         self.history_net = nn.Sequential(
-            layer_init(nn.Linear(self.history_dim, 64)),  # Plus de neurones car plus de données
+            layer_init(nn.Linear(self.history_dim, 128)),  # Plus de neurones pour plus de données (88 → 128)
+            nn.Tanh(),
+            layer_init(nn.Linear(128, 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 32)),
             nn.Tanh(),
         )
         
-        # CNN UNIQUE pour grille 120×60 (environnement + robot intégré)
+        # CNN UNIQUE pour grille 60×30 (plus petite = plus facile)
         self.cnn = nn.Sequential(
-            # 120×60 -> 60×30
+            # 60×30 -> 30×15
             nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            # 60×30 -> 30×15  
+            # 30×15 -> 15×8
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            # 30×15 -> 15×8
+            # 15×8 -> 8×4
             nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            # 15×8 -> 8×4
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Flatten(),  # 256 × 8 × 4 = 8192
-            layer_init(nn.Linear(8192, 256)),
+            nn.Flatten(),  # 128 × 8 × 4 = 4096
+            layer_init(nn.Linear(4096, 128)),
             nn.Tanh(),
         )
         
-        # Backbone combiné - QUATRE SOURCES
+        # Backbone combiné
         self.backbone = nn.Sequential(
-            layer_init(nn.Linear(64 + 32 + 256, 256)),  # robot_state + history + cnn
+            layer_init(nn.Linear(64 + 32 + 128, 128)),  # robot_state + history + cnn
             nn.Tanh(),
-            layer_init(nn.Linear(256, 128)),
+            layer_init(nn.Linear(128, 64)),
             nn.Tanh(),
         )
         
         # Actor/Critic
-        self.actor_mean = layer_init(nn.Linear(128, act_dim), std=0.01)
+        self.actor_mean = layer_init(nn.Linear(64, act_dim), std=0.01)
         self.actor_logstd = nn.Parameter(torch.zeros(1, act_dim))
-        self.critic = layer_init(nn.Linear(128, 1), std=1.0)
+        self.critic = layer_init(nn.Linear(64, 1), std=1.0)
     
     def forward(self, obs):
-        # Décoder observation: pos(3) + vel(3) + bbox(8) + history(40) + grid(7200)
+        # Décoder observation: pos(3) + vel(3) + bbox(8) + history(88) + grid(1800)
         robot_state = obs[:, :self.robot_state_dim]  # 0:6
         bbox = obs[:, self.robot_state_dim:self.robot_state_dim+self.bbox_dim]  # 6:14
         robot_and_bbox = torch.cat([robot_state, bbox], dim=1)  # 14 valeurs
         
         history_start = self.robot_state_dim + self.bbox_dim  # 14
-        history = obs[:, history_start:history_start+self.history_dim]  # 14:54
-        grid = obs[:, history_start+self.history_dim:].view(-1, 1, 120, 60)  # 54:7254
+        history = obs[:, history_start:history_start+self.history_dim]  # 14:102
+        grid = obs[:, history_start+self.history_dim:].view(-1, 1, 60, 30)  # 102:1902
         
         # Traiter séparément
         robot_feat = self.robot_net(robot_and_bbox)  # 14 → 64
@@ -123,10 +122,10 @@ class Agent(nn.Module):
         )
 
 
-def make_env(corridor_xml):
+def make_env():
     """Factory pour environnement."""
     def thunk():
-        env = CorridorEnv(corridor_xml=corridor_xml, max_steps=3000)  # 3000 steps par épisode
+        env = CorridorEnv(max_steps=3000)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env = gym.wrappers.ClipAction(env)
         return env
@@ -160,6 +159,10 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
     """Render un épisode de debug pour voir ce qui se passe."""
     print("\n🎬 DEBUG RENDER - Visualisation d'un épisode...")
     
+    # Reset AVANT de créer le viewer (génère nouveau corridor + nouveau modèle)
+    obs, _ = debug_env.reset()
+    
+    # Maintenant utiliser le nouveau modèle/data
     m = debug_env.model
     d = debug_env.data
     robot_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'robot')
@@ -172,7 +175,6 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
             v.cam.elevation = -20
             v.cam.distance = 8
             
-            obs, _ = debug_env.reset()
             done = False
             step = 0
             ep_return = 0
@@ -202,11 +204,11 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
                     stabilizing = " (STABILISATION)" if step < debug_env.stabilization_steps else ""
                     print(f"Step {step}: x={x:.2f}m, reward={reward:.3f}, return={ep_return:.1f}{stabilizing}")
                     
-                    # Décoder l'observation AVEC HISTORIQUE DES 4 COINS
+                    # Décoder l'observation AVEC HISTORIQUE ÉTENDU
                     robot_state = obs[:6]
                     bbox_corners = obs[6:14]
-                    corners_history = obs[14:54].reshape(5, 8)
-                    grid = obs[54:].reshape(120, 60)
+                    history_extended = obs[14:102].reshape(8, 11)  # 8 frames × 11 valeurs
+                    grid = obs[102:].reshape(60, 30)
                     
                     print(f"  Robot: pos=({robot_state[0]:.2f}, {robot_state[1]:.2f}, {robot_state[2]:.2f}), vel=({robot_state[3]:.2f}, {robot_state[4]:.2f}, {robot_state[5]:.2f})")
                     
@@ -215,29 +217,41 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
                     bbox_str = ", ".join([f"{name}:({bbox_corners[i*2]:.0f},{bbox_corners[i*2+1]:.0f})" for i, name in enumerate(corner_names)])
                     print(f"  BBox (row,col): {bbox_str}")
                     
-                    # Afficher historique (derniers coins relatifs)
-                    last_corners = corners_history[-1]  # 8 valeurs
+                    # Afficher historique étendu (derniers coins + vitesses relatifs)
+                    last_frame = history_extended[-1]  # 11 valeurs
+                    last_corners = last_frame[:8]  # 8 premiers = coins
+                    last_velocities = last_frame[8:]  # 3 derniers = vitesses
                     avg_row_diff = np.mean([last_corners[i*2] for i in range(4)])
                     avg_col_diff = np.mean([last_corners[i*2+1] for i in range(4)])
-                    print(f"  Historique: derniers coins relatifs avg_row={avg_row_diff:+.1f}, avg_col={avg_col_diff:+.1f}")
+                    avg_vel = np.mean(last_velocities)
+                    print(f"  Historique: coins relatifs avg_row={avg_row_diff:+.1f}, avg_col={avg_col_diff:+.1f}, avg_vel={avg_vel:+.2f}")
                     
-                    # Afficher grille unique (échantillon centre 20×20)
-                    print("  GRILLE UNIFIÉE (centre 20×20):")
-                    for i in range(30, 50):  # Lignes 30-49 (autour du robot à ligne 40)
+                    # Extraire positions des 4 coins pour les afficher sur la grille
+                    bbox_positions = [(int(bbox_corners[i*2]), int(bbox_corners[i*2+1])) for i in range(4)]
+                    
+                    # Afficher grille (20 lignes × TOUTE la largeur 30 colonnes)
+                    print("  GRILLE (lignes 0-19, toute largeur 30 cols):")
+                    for i in range(20):  # Lignes 0-19 (robot à ligne 5)
                         line = "    "
-                        for j in range(30, 50):  # Colonnes 30-49 (autour du robot à colonne 40)
-                            val = grid[i, j]
-                            if val == 0.0:
-                                line += '▓'  # Sol
-                            elif val == 0.5:
-                                line += '△'  # Rampe
-                            elif val == 0.75:
-                                line += 'R'  # Robot
-                            else:  # val == 1.0
-                                line += '░'  # Trou
-                        relative_dist = (i - 40) * 0.05  # Distance relative au robot
-                        print(f"    {relative_dist:+.2f}m: {line}")
-                    print("    (▓=sol, △=rampe, R=robot, ░=trou)")
+                        for j in range(30):  # TOUTES les colonnes (0-29 = 3m)
+                            # Vérifier si c'est un coin de la bounding box
+                            is_corner = False
+                            for idx, (row, col) in enumerate(bbox_positions):
+                                if row == i and col == j:
+                                    is_corner = True
+                                    line += 'A' if idx < 2 else 'R'  # A=avant, R=arrière
+                                    break
+                            if not is_corner:
+                                val = grid[i, j]
+                                if val == 0.0:
+                                    line += '▓'  # Sol
+                                elif val == 0.5:
+                                    line += '△'  # Bump
+                                else:  # val == 1.0
+                                    line += '░'  # Trou
+                        relative_dist = (i - 5) * 0.1  # Distance relative au robot (5 = 0.5m derrière)
+                        print(f"    {relative_dist:+.1f}m: {line}")
+                    print("    (▓=sol, △=bump, ░=trou, A=avant bbox, R=arrière bbox)")
                 
                 v.sync()
                 time.sleep(0.05)  # 20 FPS
@@ -255,7 +269,7 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
 
 
 def train(
-    total_timesteps=4_000_000,
+    total_timesteps=8_000_000,
     num_envs=32,           # PARALLÉLISATION: 32 envs simultanés
     num_steps=1024,        # Steps par rollout par env
     num_minibatches=32,    # Minibatches pour update
@@ -267,7 +281,6 @@ def train(
     ent_coef=0.01,  # Retour à l'exploration normale
     vf_coef=0.5,
     max_grad_norm=0.5,
-    corridor_xml="corridor_3x100.xml",
     seed=1,
 ):
     """Entraînement PPO optimisé."""
@@ -295,11 +308,11 @@ def train(
     print(f"Total timesteps: {total_timesteps:,}")
     print("=" * 70 + "\n")
     
-    # Environnements parallèles (CLEF DE LA VITESSE)
-    envs = gym.vector.AsyncVectorEnv([make_env(corridor_xml) for _ in range(num_envs)])
+    # Environnements parallèles avec corridors aléatoires
+    envs = gym.vector.AsyncVectorEnv([make_env() for _ in range(num_envs)])
     
     # Environnement de debug pour visualisation
-    debug_env = CorridorEnv(corridor_xml=corridor_xml, max_steps=3000)
+    debug_env = CorridorEnv(max_steps=3000)
     
     obs_dim = envs.single_observation_space.shape[0]
     act_dim = envs.single_action_space.shape[0]
@@ -589,10 +602,9 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser()
-    parser.add_argument("--timesteps", type=int, default=4_000_000)
+    parser.add_argument("--timesteps", type=int, default=8_000_000)
     parser.add_argument("--num-envs", type=int, default=32)
     parser.add_argument("--num-steps", type=int, default=1024)
-    parser.add_argument("--corridor", type=str, default="corridor_3x100.xml")
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--seed", type=int, default=1)
     parser.add_argument("--fresh-start", action="store_true", help="Forcer un nouveau démarrage (ignorer modèles existants)")
@@ -602,7 +614,6 @@ if __name__ == "__main__":
         total_timesteps=args.timesteps,
         num_envs=args.num_envs,
         num_steps=args.num_steps,
-        corridor_xml=args.corridor,
         lr=args.lr,
         seed=args.seed,
     )

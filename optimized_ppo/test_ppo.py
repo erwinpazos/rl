@@ -26,11 +26,11 @@ class Agent(nn.Module):
     def __init__(self, obs_dim, act_dim):
         super().__init__()
         
-        # Observation: pos(3) + vel(3) + bbox(8) + history(40) + grid(7200) = 7254
+        # Observation: pos(3) + vel(3) + bbox(8) + history(88) + grid(1800) = 1902
         self.robot_state_dim = 6   # pos(3) + vel(3)
         self.bbox_dim = 8          # 4 coins × 2 coords
-        self.history_dim = 40      # 5 positions × 8 coords (4 coins × 2) = 40
-        self.grid_dim = 7200       # 120×60 = 7200
+        self.history_dim = 88      # 8 frames × 11 valeurs (8 coins + 3 vitesses) = 88
+        self.grid_dim = 1800       # 60×30 = 1800
         
         # MLP pour état robot (position + vitesse + bbox)
         self.robot_net = nn.Sequential(
@@ -40,40 +40,40 @@ class Agent(nn.Module):
             nn.Tanh(),
         )
         
-        # MLP pour historique des 4 coins (anticipation)
+        # MLP pour historique des positions + vitesses (anticipation)
         self.history_net = nn.Sequential(
-            layer_init(nn.Linear(self.history_dim, 64)),
+            layer_init(nn.Linear(self.history_dim, 128)),
+            nn.Tanh(),
+            layer_init(nn.Linear(128, 64)),
             nn.Tanh(),
             layer_init(nn.Linear(64, 32)),
             nn.Tanh(),
         )
         
-        # CNN UNIQUE pour grille 120×60
+        # CNN UNIQUE pour grille 60×30
         self.cnn = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),   # 120×60 -> 60×30
+            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),   # 60×30 -> 30×15
             nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # 60×30 -> 30×15
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # 30×15 -> 15×8
             nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # 30×15 -> 15×8
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # 15×8 -> 8×4
             nn.ReLU(),
-            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),# 15×8 -> 8×4
-            nn.ReLU(),
-            nn.Flatten(),  # 256 × 8 × 4 = 8192
-            layer_init(nn.Linear(8192, 256)),
+            nn.Flatten(),  # 128 × 8 × 4 = 4096
+            layer_init(nn.Linear(4096, 128)),
             nn.Tanh(),
         )
         
         # Backbone combiné
         self.backbone = nn.Sequential(
-            layer_init(nn.Linear(64 + 32 + 256, 256)),  # robot + history + cnn
+            layer_init(nn.Linear(64 + 32 + 128, 128)),  # robot + history + cnn
             nn.Tanh(),
-            layer_init(nn.Linear(256, 128)),
+            layer_init(nn.Linear(128, 64)),
             nn.Tanh(),
         )
         
-        self.actor_mean = layer_init(nn.Linear(128, act_dim), std=0.01)
+        self.actor_mean = layer_init(nn.Linear(64, act_dim), std=0.01)
         self.actor_logstd = nn.Parameter(torch.zeros(1, act_dim))
-        self.critic = layer_init(nn.Linear(128, 1), std=1.0)
+        self.critic = layer_init(nn.Linear(64, 1), std=1.0)
     
     def forward(self, obs):
         # Décoder observation
@@ -82,8 +82,8 @@ class Agent(nn.Module):
         robot_and_bbox = torch.cat([robot_state, bbox], dim=1)  # 14 valeurs
         
         history_start = self.robot_state_dim + self.bbox_dim  # 14
-        history = obs[:, history_start:history_start+self.history_dim]  # 14:54
-        grid = obs[:, history_start+self.history_dim:].view(-1, 1, 120, 60)  # 54:7254
+        history = obs[:, history_start:history_start+self.history_dim]  # 14:102
+        grid = obs[:, history_start+self.history_dim:].view(-1, 1, 60, 30)  # 102:1902
         
         # Traiter séparément
         robot_feat = self.robot_net(robot_and_bbox)
@@ -108,24 +108,24 @@ def display_vision(obs, step, ret):
     """Afficher vision robot dans terminal."""
     print("\033[2J\033[H", end="")
     
-    # Décoder observation: pos(3) + vel(3) + bbox(8) + history(40) + grid(7200)
+    # Décoder observation: pos(3) + vel(3) + bbox(8) + history(88) + grid(1800)
     robot = obs[:6]
     bbox = obs[6:14]
-    grid = obs[54:].reshape(120, 60)
+    grid = obs[102:].reshape(60, 30)
     
-    print("=" * 70)
+    print("=" * 50)
     print(f"Step: {step} | Return: {ret:.1f}")
     print(f"Position: x={robot[0]:.2f}m, y={robot[1]:.2f}m, z={robot[2]:.2f}m")
     print(f"Velocity: vx={robot[3]:.2f}, vy={robot[4]:.2f}, vz={robot[5]:.2f}")
-    print("=" * 70)
-    print("\nVision 120×60 (centre 20×20 autour du robot):")
+    print("=" * 50)
+    print("\nVision 60×30 (robot à ligne 10):")
     print("-" * 40)
     
-    # Afficher grille centre (lignes 30-49, colonnes 20-39)
-    for i in range(30, 50):
-        relative_dist = (i - 40) * 0.05
-        line = f"{relative_dist:+.2f}m: "
-        for j in range(20, 40):
+    # Afficher grille (20 premières lignes)
+    for i in range(20):
+        relative_dist = (i - 10) * 0.1  # Robot à ligne 10
+        line = f"{relative_dist:+.1f}m: "
+        for j in range(30):
             val = grid[i, j]
             if val == 0.0:
                 line += '▓'
@@ -136,11 +136,11 @@ def display_vision(obs, step, ret):
         print(line)
     
     print("-" * 40)
-    print("Légende: ▓=sol  △=rampe  ░=trou")
-    print("=" * 70)
+    print("Légende: ▓=sol  △=bump  ░=trou")
+    print("=" * 50)
 
 
-def test(model_path, corridor_xml, num_episodes, render, show_vision):
+def test(model_path, num_episodes, render, show_vision, corridor_xml=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     env = CorridorEnv(corridor_xml=corridor_xml)
@@ -152,26 +152,32 @@ def test(model_path, corridor_xml, num_episodes, render, show_vision):
     agent.eval()
     
     print(f"Model: {model_path}")
-    print(f"Corridor: {corridor_xml}")
+    if corridor_xml:
+        print(f"Corridor: {corridor_xml} (fixe)")
+    else:
+        print(f"Corridor: généré aléatoirement")
     print(f"Device: {device}\n")
     
     returns = []
     distances = []
     
     if render:
-        m = env.model
-        d = env.data
-        robot_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'robot')
-        
-        with viewer.launch_passive(m, d) as v:
-            v.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
-            v.cam.trackbodyid = robot_id
-            v.cam.azimuth = 180
-            v.cam.elevation = -20
-            v.cam.distance = 8
+        for ep in range(num_episodes):
+            # Reset AVANT de créer le viewer (génère nouveau corridor + nouveau modèle)
+            obs, _ = env.reset()
             
-            for ep in range(num_episodes):
-                obs, _ = env.reset()
+            # Créer viewer avec le nouveau modèle
+            m = env.model
+            d = env.data
+            robot_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'robot')
+            
+            with viewer.launch_passive(m, d) as v:
+                v.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+                v.cam.trackbodyid = robot_id
+                v.cam.azimuth = 180
+                v.cam.elevation = -20
+                v.cam.distance = 8
+                
                 done = False
                 ep_return = 0
                 step = 0
@@ -195,12 +201,9 @@ def test(model_path, corridor_xml, num_episodes, render, show_vision):
                     v.sync()
                     time.sleep(0.02)
                 
-                returns.append(ep_return)
-                distances.append(info['x'])
-                print(f"Episode {ep + 1}: Return={ep_return:.1f}, Distance={info['x']:.1f}m, Reason={info.get('reason', 'truncated')}")
-                
-                if not v.is_running():
-                    break
+            returns.append(ep_return)
+            distances.append(info['x'])
+            print(f"Episode {ep + 1}: Return={ep_return:.1f}, Distance={info['x']:.1f}m, Reason={info.get('reason', 'truncated')}")
     else:
         for ep in range(num_episodes):
             obs, _ = env.reset()
@@ -242,7 +245,7 @@ def test(model_path, corridor_xml, num_episodes, render, show_vision):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default=None)
-    parser.add_argument("--corridor", type=str, default="corridor_3x100.xml")
+    parser.add_argument("--corridor", type=str, default=None, help="Corridor XML fixe (défaut: aléatoire)")
     parser.add_argument("--episodes", type=int, default=5)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--show-vision", action="store_true")
@@ -258,4 +261,4 @@ if __name__ == "__main__":
         model_path = models[0]
         print(f"Auto-détecté: {model_path}\n")
     
-    test(model_path, args.corridor, args.episodes, args.render, args.show_vision)
+    test(model_path, args.episodes, args.render, args.show_vision, args.corridor)
