@@ -1,6 +1,6 @@
 """
-Environnement Gymnasium pour robot 4 roues dans corridor avec obstacles.
-Optimisé pour apprentissage PPO avec spawn aléatoire.
+Environnement Gymnasium SIMPLIFIÉ pour robot 4 roues dans corridor.
+Version nettoyée avec grille 0.05m et CNN unique.
 """
 import numpy as np
 import gymnasium as gym
@@ -13,11 +13,11 @@ class CorridorEnv(gym.Env):
     """
     Robot 4 roues naviguant un corridor avec trous et rampes.
     
-    Observation (198 valeurs):
+    Observation:
         - Position robot (x, y, z): 3
-        - Vitesse robot (vx, vy, vz): 3
-        - Position 4 roues dans grille (row, col): 8
-        - Grille sol 16x12 devant robot: 192 (0=sol, 1=rampe, 2=trou)
+        - Vitesse robot (vx, vy, vz): 3  
+        - Bounding box coins (4 coins × 2 coords): 8
+        - Grille environnement 120×80: 9600 (0=sol, 0.5=rampe, 1=trou)
     
     Action (4 valeurs):
         - Couple roue FL, FR, RL, RR
@@ -25,32 +25,43 @@ class CorridorEnv(gym.Env):
     
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
     
-    def __init__(self, corridor_xml="corridor_3x100.xml", max_steps=1000):
+    def __init__(self, corridor_xml="corridor_100.xml", max_steps=3000):
         super().__init__()
         
         # Charger modèle MuJoCo
         self.model = self._build_model("four_wheels_robot.xml", corridor_xml)
         self.data = mujoco.MjData(self.model)
         
-        # Paramètres
+        # Paramètres SIMPLIFIÉS
         self.max_steps = max_steps
         self.corridor_length = 100.0
         self.corridor_width = 3.0
-        self.cell_size = 0.0625  # 4× plus petit (0.25 → 0.0625) = 6.25cm
+        self.cell_size = 0.05  # 5cm par cellule
         
-        # Grille: 32 lignes (2m devant) × 64 colonnes (4m largeur = tout le couloir + zones)
-        self.grid_rows = 32  # 2m ÷ 0.0625m = 32 lignes
-        self.grid_cols = 64  # 4m ÷ 0.0625m = 64 colonnes
+        # Grille vision: 6m (4m devant + 2m derrière) × 3m largeur
+        self.vision_length = 6.0  # 4m devant + 2m derrière
+        self.vision_width = 3.0   # 3m largeur (exactement la largeur du couloir)
+        self.grid_rows = int(self.vision_length / self.cell_size)  # 120 lignes
+        self.grid_cols = int(self.vision_width / self.cell_size)   # 60 colonnes
         
-        # Distance roues depuis centre (correspond au XML)
-        self.wheel_offset_x = 0.35  # avant/arrière (±0.35 dans XML)
-        self.wheel_offset_y = 0.30  # gauche/droite (±0.30 dans XML)
+        # Dimensions robot (bounding box) - ALIGNÉES sur la grille
+        self.robot_length = 0.60  # 12 cellules exactement (12 × 0.05)
+        self.robot_width = 0.40   # 8 cellules exactement (8 × 0.05)
+        
+        # Historique des positions pour anticipation (AVANT les espaces)
+        self.history_interval = 20  # Sauvegarder position tous les 20 steps
+        self.history_length = 5     # Garder les 5 dernières positions
+        self.position_history = []  # Buffer des positions (x, y, angle)
+        
+        # Période de stabilisation
+        self.stabilization_steps = 20  # Pas d'actions pendant 20 steps
         
         # Construire carte
         self.cell_map = self._build_cell_map()
         
-        # Espaces - DEUX COUCHES
-        obs_size = 6 + 8 + 2 * (self.grid_rows * self.grid_cols)  # 6 + 8 + 2×2048 = 4110
+        # Espaces - UN SEUL CNN + historique
+        history_size = self.history_length * 8  # 5 positions × 8 coords (4 coins × 2) = 40
+        obs_size = 6 + 8 + history_size + (self.grid_rows * self.grid_cols)  # 6 + 8 + 40 + 7200 = 7254
         self.observation_space = spaces.Box(-np.inf, np.inf, (obs_size,), np.float32)
         self.action_space = spaces.Box(-1.0, 1.0, (4,), np.float32)
         
@@ -58,12 +69,12 @@ class CorridorEnv(gym.Env):
         self.step_count = 0
         self.prev_x = 0.0
         
-        # Détection blocage (basé sur position, pas delta)
-        self.stuck_check_interval = 50   # Vérifier tous les 50 steps
-        self.stuck_min_advance = 0.3     # Doit avancer d'au moins 30cm en 50 steps
-        self.stuck_x_checkpoint = 0.0    # Position X au dernier checkpoint
-        self.stuck_counter = 0           # Nombre de fois bloqué consécutives
-        self.stuck_max_count = 2         # 2 × 50 = 100 steps bloqué = terminaison
+        # Détection blocage
+        self.stuck_check_interval = 50
+        self.stuck_min_advance = 0.3
+        self.stuck_x_checkpoint = 0.0
+        self.stuck_counter = 0
+        self.stuck_max_count = 2
         
         # IDs corps MuJoCo
         self.robot_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'robot')
@@ -95,18 +106,31 @@ class CorridorEnv(gym.Env):
         self.stuck_counter = 0
         self.stuck_x_checkpoint = self.data.qpos[0]  # Reset checkpoint aussi
         
+        # Reset historique des positions
+        self.position_history = []
+        self._update_position_history()  # Ajouter position initiale
+        
         return self._get_obs(), self._get_info()
     
     def step(self, action):
-        # Appliquer couple roues
-        action = np.clip(action, -1.0, 1.0) * 20.0
-        self.data.ctrl[:] = action
+        # Période de stabilisation : pas d'actions pendant les premiers steps
+        if self.step_count < self.stabilization_steps:
+            # Actions nulles pendant la stabilisation
+            self.data.ctrl[:] = 0.0
+        else:
+            # Appliquer couple roues normalement
+            action = np.clip(action, -1.0, 1.0) * 20.0
+            self.data.ctrl[:] = action
         
         # Simuler (4 substeps)
         for _ in range(4):
             mujoco.mj_step(self.model, self.data)
         
         self.step_count += 1
+        
+        # Mettre à jour historique des positions
+        if self.step_count % self.history_interval == 0:
+            self._update_position_history()
         
         # Récompense et terminaison
         reward, terminated, info = self._compute_reward()
@@ -116,154 +140,162 @@ class CorridorEnv(gym.Env):
         return self._get_obs(), reward, terminated, truncated, info
     
     def _get_obs(self):
-        """Observation complète avec DEUX COUCHES : environnement + robot."""
+        """Observation avec historique des positions pour anticipation."""
         pos = self.data.qpos[:3]
         vel = self.data.qvel[:3]
         
-        # Position des 4 roues dans la grille
-        wheel_positions = self._get_wheel_positions(pos[0], pos[1])
+        # Bounding box du robot (4 coins dans repère grille)
+        bbox_corners = self._get_robot_bbox_corners(pos[0], pos[1])
         
-        # COUCHE 1: Grille environnement (sol/trou/rampe)
-        env_grid = self._get_grid_obs_environment(pos[0], pos[1])
+        # Historique des positions (5 positions × 3 coords = 15 valeurs)
+        position_history = self._get_position_history_obs()
         
-        # COUCHE 2: Grille robot (position du corps)
-        robot_grid = self._get_grid_obs_robot(pos[0], pos[1])
+        # Grille environnement
+        grid = self._get_grid_obs(pos[0], pos[1])
         
         return np.concatenate([
-            pos, 
-            vel, 
-            wheel_positions,
-            env_grid.flatten(),    # Couche 1: 32×64 = 2048 valeurs
-            robot_grid.flatten()   # Couche 2: 32×64 = 2048 valeurs
-        ]).astype(np.float32)  # Total: 6 + 8 + 2048 + 2048 = 4110 valeurs
+            pos,                    # 3 valeurs (position actuelle)
+            vel,                    # 3 valeurs (vitesse actuelle)
+            bbox_corners,           # 8 valeurs (4 coins × 2 coords actuels)
+            position_history,       # 40 valeurs (5 positions × 8 coords relatives)
+            grid.flatten()          # 7200 valeurs (120×60)
+        ]).astype(np.float32)       # Total: 6 + 8 + 40 + 7200 = 7254 valeurs
     
-    def _get_wheel_positions(self, robot_x, robot_y):
-        """Position (row, col) de chaque roue dans la grille."""
-        # Récupérer orientation robot
+    def _get_robot_bbox_corners(self, robot_x, robot_y):
+        """Position des 4 coins de la bounding box dans le repère relatif de la grille.
+        
+        La bounding box est un rectangle FIXE de 0.6m × 0.4m (12×8 cellules) qui pivote
+        avec l'angle du robot. Les dimensions restent constantes quelle que soit l'orientation.
+        """
+        # Récupérer orientation robot (quaternion → angle autour de Z)
         quat = self.data.qpos[3:7]
-        # Angle autour de Z (approximation pour rotation 2D)
+        # Formule correcte pour extraire l'angle yaw d'un quaternion
         angle = 2 * np.arctan2(quat[3], quat[0])
         
         cos_a = np.cos(angle)
         sin_a = np.sin(angle)
         
-        wheels = []
-        offsets = [
-            (self.wheel_offset_x, self.wheel_offset_y),   # FL
-            (self.wheel_offset_x, -self.wheel_offset_y),  # FR
-            (-self.wheel_offset_x, self.wheel_offset_y),  # RL
-            (-self.wheel_offset_x, -self.wheel_offset_y), # RR
+        # 4 coins de la bounding box dans le repère LOCAL du robot
+        # X = avant/arrière (longueur), Y = gauche/droite (largeur)
+        half_length = self.robot_length / 2  # 0.3m = 6 cellules
+        half_width = self.robot_width / 2    # 0.2m = 4 cellules
+        
+        # Coins dans le repère local (X avant, Y gauche)
+        corners_local = [
+            ( half_length,  half_width),  # avant-gauche
+            ( half_length, -half_width),  # avant-droite
+            (-half_length,  half_width),  # arrière-gauche
+            (-half_length, -half_width),  # arrière-droite
         ]
         
-        for offset_x, offset_y in offsets:
-            # Position mondiale roue
-            wx = robot_x + cos_a * offset_x - sin_a * offset_y
-            wy = robot_y + sin_a * offset_x + cos_a * offset_y
-            
-            # Convertir en indices grille
-            row = int(wx / self.cell_size)
-            col = int((wy + self.corridor_width/2) / self.cell_size)
-            
-            wheels.extend([row, col])
+        corners_grid = []
         
-        return np.array(wheels, dtype=np.float32)
+        # Position du robot dans la grille (vision fixe)
+        robot_grid_row = 40  # 2m derrière = 40 cellules (fixe en X)
+        
+        # Position Y du robot dans la grille
+        robot_grid_col = int((robot_y + self.corridor_width/2) / self.cell_size)
+        
+        for local_x, local_y in corners_local:
+            # Rotation 2D autour du centre du robot
+            # world_offset_x = déplacement en X (direction du couloir = rows)
+            # world_offset_y = déplacement en Y (perpendiculaire = cols)
+            world_offset_x = cos_a * local_x - sin_a * local_y
+            world_offset_y = sin_a * local_x + cos_a * local_y
+            
+            # Convertir en cellules de grille
+            # row augmente vers l'avant (X positif)
+            # col augmente vers la gauche (Y positif)
+            delta_row = round(world_offset_x / self.cell_size)
+            delta_col = round(world_offset_y / self.cell_size)
+            
+            grid_row = robot_grid_row + delta_row
+            grid_col = robot_grid_col + delta_col
+            
+            corners_grid.extend([grid_row, grid_col])
+        
+        return np.array(corners_grid, dtype=np.float32)
+    
+    def _update_position_history(self):
+        """Mettre à jour l'historique des 4 coins de la bounding box."""
+        # Calculer les 4 coins actuels dans le repère grille
+        current_corners = self._get_robot_bbox_corners(self.data.qpos[0], self.data.qpos[1])
+        
+        # Stocker les 4 coins (8 valeurs : 4 coins × 2 coords)
+        self.position_history.append(current_corners.copy())
+        
+        # Garder seulement les N dernières positions
+        if len(self.position_history) > self.history_length:
+            self.position_history.pop(0)
+    
+    def _get_position_history_obs(self):
+        """Obtenir l'historique des 4 coins en coordonnées RELATIVES."""
+        # Position actuelle des 4 coins
+        current_corners = self._get_robot_bbox_corners(self.data.qpos[0], self.data.qpos[1])
+        
+        history_obs = []
+        
+        for i in range(self.history_length):
+            if i < len(self.position_history):
+                # Coins passés
+                past_corners = self.position_history[i]
+                
+                # Convertir en coordonnées RELATIVES par rapport à la position actuelle
+                # (différence entre position passée et position actuelle)
+                relative_corners = past_corners - current_corners
+                history_obs.extend(relative_corners)
+            else:
+                # Remplir avec position actuelle (différence = 0) si pas assez d'historique
+                history_obs.extend([0.0] * 8)  # 8 valeurs (4 coins × 2 coords)
+        
+        return np.array(history_obs, dtype=np.float32)
     
     def _get_grid_obs(self, robot_x, robot_y):
-        """Grille 16×16 AUTOUR du robot (pas seulement devant)."""
+        """Grille unique 120×80 avec environnement ET robot intégré."""
         grid = np.zeros((self.grid_rows, self.grid_cols), dtype=np.float32)
         
-        robot_row = int(robot_x / self.cell_size)
-        robot_col = int((robot_y + self.corridor_width/2) / self.cell_size)
+        # Position du robot dans la grille monde
+        robot_row_world = int(robot_x / self.cell_size)
+        robot_col_world = int((robot_y + self.corridor_width/2) / self.cell_size)
         
+        # Limites de la vision (4m devant, 2m derrière)
+        vision_start_row = robot_row_world - 40  # 2m derrière = 40 cellules
+        vision_end_row = robot_row_world + 80    # 4m devant = 80 cellules
+        
+        # Vision Y FIXE : toujours toute la largeur du couloir (3m = 60 cellules)
+        # Centrée sur y=0 (centre du couloir en coordonnées monde)
+        corridor_center_world_col = int((0 + self.corridor_width/2) / self.cell_size)  # y=0 → col=30
+        vision_start_col = corridor_center_world_col - 30  # 30 - 30 = 0 (1.5m à gauche)
+        vision_end_col = corridor_center_world_col + 30    # 30 + 30 = 60 (1.5m à droite)
+        
+        # Remplir la grille avec l'environnement
         for i in range(self.grid_rows):
             for j in range(self.grid_cols):
-                # Vision centrée: 16 lignes derrière, 16 lignes devant
-                row = robot_row - 16 + i  # De -16 à +15 par rapport au robot
-                col = robot_col - 32 + j  # Centré sur robot (±32 colonnes = 4m largeur)
+                # Position dans le monde
+                world_row = vision_start_row + i
+                world_col = vision_start_col + j
                 
-                # Si en dehors du couloir (col < 0 ou col >= 12), c'est un trou
-                if col < 0 or col >= 12:
-                    grid[i, j] = 2  # Trou autour du couloir
+                # Vérifier si dans les limites du couloir
+                world_y = (world_col * self.cell_size) - self.corridor_width/2
+                
+                if world_col < 0 or world_y < -self.corridor_width/2 or world_y > self.corridor_width/2:
+                    # En dehors du couloir = trou
+                    grid[i, j] = 1.0
                 else:
-                    grid[i, j] = self.cell_map.get((row, col), 2)  # Défaut trou
-        
-        return grid
-    
-    def _get_grid_obs_environment(self, robot_x, robot_y):
-        """COUCHE 1: Grille environnement NORMALISÉE (0-1)."""
-        grid = np.zeros((self.grid_rows, self.grid_cols), dtype=np.float32)
-        
-        robot_row = int(robot_x / self.cell_size)
-        
-        for i in range(self.grid_rows):
-            for j in range(self.grid_cols):
-                # Vision X: centrée sur robot (1m derrière, 1m devant)
-                row = robot_row - 16 + i  # De -16 à +15 par rapport au robot
-                
-                # Vision Y: FIXE de -2m à +2m (couvre tout le couloir)
-                world_y = -2.0 + (j * self.cell_size)  # De -2m à +2m selon j
-                
-                # Convertir vers cell_map (grille 0.0625m)
-                if row >= 0 and row < len(self.cell_map) // 48:  # Vérifier limites
-                    world_col = int((world_y + self.corridor_width/2) / self.cell_size)
+                    # Chercher dans la carte des cellules
+                    cell_type = self.cell_map.get((world_row, world_col), 2)  # Défaut trou
                     
-                    # Si en dehors du couloir (48 colonnes), c'est un trou
-                    if world_col < 0 or world_col >= 48:
-                        cell_type = 2  # Trou autour du couloir
-                    else:
-                        cell_type = self.cell_map.get((row, world_col), 2)  # Défaut trou
-                else:
-                    cell_type = 2  # Trou si hors limites
-                
-                # NORMALISER: 0=sol, 0.5=rampe, 1=trou
-                if cell_type == 0:
-                    grid[i, j] = 0.0  # Sol = 0
-                elif cell_type == 1:
-                    grid[i, j] = 0.5  # Rampe = 0.5
-                else:  # cell_type == 2
-                    grid[i, j] = 1.0  # Trou = 1
+                    # Normaliser: 0=sol, 0.5=rampe, 1=trou
+                    if cell_type == 0:
+                        grid[i, j] = 0.0  # Sol
+                    elif cell_type == 1:
+                        grid[i, j] = 0.5  # Rampe
+                    else:  # cell_type == 2
+                        grid[i, j] = 1.0  # Trou
+        
+        # PAS de robot dans la grille - les 4 coins sont donnés séparément dans l'observation
         
         return grid
-    
-    def _get_grid_obs_robot(self, robot_x, robot_y):
-        """COUCHE 2: Grille robot NORMALISÉE (0-1)."""
-        grid = np.zeros((self.grid_rows, self.grid_cols), dtype=np.float32)  # Vide = 0
-        
-        # Récupérer orientation robot
-        quat = self.data.qpos[3:7]
-        angle = 2 * np.arctan2(quat[3], quat[0])
-        cos_a = np.cos(angle)
-        sin_a = np.sin(angle)
-        
-        # Dimensions robot
-        robot_length = 0.7  # wheelbase
-        robot_width = 0.6   # track width
-        
-        # Position du robot dans la grille
-        center_row = 16  # Robot au centre des 32 lignes
-        robot_y_in_grid = int((robot_y + 2.0) / self.cell_size)  # Position Y dans la grille
-        center_col = robot_y_in_grid
-        
-        # Remplissage ULTRA DENSE du corps du robot
-        step = self.cell_size / 4  # Sous-échantillonnage dense
-        
-        x_range = np.arange(-robot_length/2, robot_length/2 + step, step)
-        y_range = np.arange(-robot_width/2, robot_width/2 + step, step)
-        
-        for local_x in x_range:
-            for local_y in y_range:
-                # Appliquer la rotation du robot
-                rotated_x = cos_a * local_x - sin_a * local_y
-                rotated_y = sin_a * local_x + cos_a * local_y
-                
-                # Convertir en position grille
-                grid_row = center_row + int(rotated_x / self.cell_size)
-                grid_col = center_col + int(rotated_y / self.cell_size)
-                
-                if 0 <= grid_row < self.grid_rows and 0 <= grid_col < self.grid_cols:
-                    grid[grid_row, grid_col] = 1.0  # Robot présent = 1
-        
-        return grid  # Vide = 0, Robot = 1
     
     def _compute_reward(self):
         """Récompense shaped pour apprentissage efficace."""
@@ -302,25 +334,7 @@ class CorridorEnv(gym.Env):
         delta_x = x - self.prev_x
         self.prev_x = x
         
-        # DÉTECTION BLOCAGE: vérifier progression sur fenêtre de temps
-        if self.step_count % self.stuck_check_interval == 0 and self.step_count > 0:
-            advance_since_checkpoint = x - self.stuck_x_checkpoint
-            
-            if advance_since_checkpoint < self.stuck_min_advance:
-                # Pas assez avancé depuis le dernier checkpoint
-                self.stuck_counter += 1
-            else:
-                # Bonne progression, reset
-                self.stuck_counter = 0
-            
-            # Mettre à jour checkpoint
-            self.stuck_x_checkpoint = x
-        
-        # Échec: bloqué trop longtemps (2 × 50 = 100 steps sans avancer de 30cm)
-        if self.stuck_counter >= self.stuck_max_count:
-            info['reason'] = 'stuck'
-            return -50.0, True, info
-        
+
         # Récompense progression TRÈS généreuse
         reward = delta_x * 20.0
         
@@ -355,17 +369,17 @@ class CorridorEnv(gym.Env):
         }
     
     def _build_cell_map(self):
-        """Construire carte des cellules depuis géométries MuJoCo - GRILLE 0.0625m."""
+        """Construire carte des cellules depuis géométries MuJoCo - GRILLE 0.05m."""
         cell_map = {}
-        n_rows = int(self.corridor_length / self.cell_size) + 10  # Grille 0.0625m
-        n_cols = int(self.corridor_width / self.cell_size)  # 48 colonnes
+        n_rows = int(self.corridor_length / self.cell_size) + 100  # Grille 0.05m = 2000+ lignes
+        n_cols = int(self.corridor_width / self.cell_size)         # 60 colonnes
         
-        # Tout est trou par défaut (comme dans l'image)
+        # Tout est trou par défaut
         for r in range(n_rows):
             for c in range(n_cols):
                 cell_map[(r, c)] = 2  # Trou par défaut
         
-        # Parcourir géométries
+        # Parcourir géométries MuJoCo
         for geom_id in range(self.model.ngeom):
             name = mujoco.mj_id2name(self.model, mujoco.mjtObj.mjOBJ_GEOM, geom_id)
             if not name:
@@ -374,26 +388,26 @@ class CorridorEnv(gym.Env):
             pos = self.model.geom_pos[geom_id]
             size = self.model.geom_size[geom_id]
             
-            # Type
+            # Déterminer le type de cellule
             name_lower = name.lower()
             if 'ramp' in name_lower:
-                cell_type = 1
+                cell_type = 1  # Rampe
             elif 'flat' in name_lower or 'floor' in name_lower or 'cell' in name_lower:
-                cell_type = 0
+                cell_type = 0  # Sol
             else:
-                continue
+                continue  # Ignorer autres géométries
             
-            # Marquer cellules - GRILLE 0.25m
+            # Marquer toutes les cellules couvertes par cette géométrie
             min_x = pos[0] - size[0]
             max_x = pos[0] + size[0]
             min_y = pos[1] - size[1]
             max_y = pos[1] + size[1]
             
             for r in range(n_rows):
-                cx = (r + 0.5) * self.cell_size  # Grille 0.0625m
+                cx = (r + 0.5) * self.cell_size  # Centre de la cellule en X
                 if min_x <= cx <= max_x:
                     for c in range(n_cols):
-                        cy = (c + 0.5) * self.cell_size - self.corridor_width/2  # Grille 0.0625m
+                        cy = (c + 0.5) * self.cell_size - self.corridor_width/2  # Centre en Y
                         if min_y <= cy <= max_y:
                             cell_map[(r, c)] = cell_type
         

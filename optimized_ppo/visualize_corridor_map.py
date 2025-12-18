@@ -1,6 +1,6 @@
 """
-Visualize the corridor cell map as the robot would see it.
-INSPIRÉ DU CODE QUI MARCHE dans ppo/visualize_corridor_map_old.py
+Visualisation EXACTE de ce que le CNN simplifié reçoit en entrée.
+Grille 120×80 avec cellules 0.05m, robot intégré dans la grille.
 """
 from corridor_env import CorridorEnv
 import numpy as np
@@ -92,118 +92,205 @@ def visualize_full_corridor(corridor_xml="corridor_100.xml"):
     
     env.close()
 
-def visualize_model_exact_vision(corridor_xml="corridor_100.xml", random_spawn=True, test_position=None):
-    """Visualize EXACTLY what the model sees: robot state + wheel positions + grid with rows."""
+def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=None, robot_angle=None):
+    """Visualise EXACTEMENT ce que le CNN simplifié reçoit en entrée."""
     env = CorridorEnv(corridor_xml=corridor_xml)
     
-    if test_position:
-        # Position de test spécifique
-        import numpy as np
-        robot_x, robot_y, robot_angle = test_position
-        env.data.qpos[0] = robot_x
-        env.data.qpos[1] = robot_y
-        env.data.qpos[2] = 0.45
-        env.data.qpos[3] = np.cos(robot_angle / 2)
-        env.data.qpos[4] = 0
-        env.data.qpos[5] = 0
-        env.data.qpos[6] = np.sin(robot_angle / 2)
-        obs = env._get_obs()
-    elif random_spawn:
-        # Spawn COMPLÈTEMENT aléatoire dans tout le couloir
-        import numpy as np
-        robot_x = np.random.uniform(5.0, 95.0)  # X aléatoire dans tout le couloir
-        robot_y = np.random.uniform(-1.0, 1.0)  # Y aléatoire
-        robot_angle = np.random.uniform(-np.pi/4, np.pi/4)  # Angle aléatoire
-        
-        # Positionner le robot
-        env.data.qpos[0] = robot_x
-        env.data.qpos[1] = robot_y
-        env.data.qpos[2] = 0.45
-        env.data.qpos[3] = np.cos(robot_angle / 2)  # Quaternion
-        env.data.qpos[4] = 0
-        env.data.qpos[5] = 0
-        env.data.qpos[6] = np.sin(robot_angle / 2)
-        
-        # Obtenir observation
-        obs = env._get_obs()
-    else:
-        # Position manuelle
-        env.data.qpos[0] = 10.0
-        env.data.qpos[1] = 0.0
-        obs = env._get_obs()
-        robot_x = 10.0
-        robot_y = 0.0
-        robot_angle = 0.0
+    # Position du robot
+    if robot_x is None:
+        robot_x = np.random.uniform(5.0, 95.0)  # Position aléatoire
+    if robot_y is None:
+        robot_y = np.random.uniform(-1.0, 1.0)
+    if robot_angle is None:
+        robot_angle = np.random.uniform(-np.pi/4, np.pi/4)
     
-    # Décoder l'observation EXACTE du modèle
+    # Reset pour initialiser l'historique
+    env.reset()
+    
+    # Positionner le robot à la position voulue
+    env.data.qpos[0] = robot_x
+    env.data.qpos[1] = robot_y
+    env.data.qpos[2] = 0.45
+    env.data.qpos[3] = np.cos(robot_angle / 2)
+    env.data.qpos[4] = 0
+    env.data.qpos[5] = 0
+    env.data.qpos[6] = np.sin(robot_angle / 2)
+    
+    # Mettre à jour l'historique avec la nouvelle position
+    env._update_position_history()
+    
+    # Obtenir observation EXACTE
+    obs = env._get_obs()
+    
+    # Décoder l'observation AVEC HISTORIQUE DES 4 COINS
     robot_state = obs[:6]  # pos(3) + vel(3)
-    wheel_positions = obs[6:14]  # 4 roues × (row, col)
-    grid = obs[14:].reshape(32, 64)  # Grille 32×64 CORRIGÉE
+    bbox_corners = obs[6:14]  # 4 coins actuels × (row, col)
+    corners_history = obs[14:54].reshape(5, 8)  # 5 positions × 8 coords relatives
+    grid = obs[54:].reshape(120, 60)  # Grille 120×60
     
-    print("="*80)
-    print("VISION EXACTE DU MODÈLE (2062 valeurs d'observation)")
-    print("="*80)
+    print("="*100)
+    print("ENTRÉE EXACTE DU CNN AVEC HISTORIQUE")
+    print("="*100)
+    print(f"Observation totale: {obs.shape[0]} valeurs (6 + 8 + 40 + {120*60} = {6 + 8 + 40 + 120*60})")
     print(f"Robot position: x={robot_state[0]:.3f}m, y={robot_state[1]:.3f}m, z={robot_state[2]:.3f}m")
     print(f"Robot velocity: vx={robot_state[3]:.3f}, vy={robot_state[4]:.3f}, vz={robot_state[5]:.3f}")
     print(f"Robot angle: {np.degrees(robot_angle):.1f}°")
     print()
     
-    # Positions des roues (comme le modèle les voit)
-    wheel_names = ['FL', 'FR', 'RL', 'RR']
-    print("POSITIONS DES ROUES (dans la grille, comme vues par le modèle):")
-    for i, name in enumerate(wheel_names):
-        row = int(wheel_positions[i*2])
-        col = int(wheel_positions[i*2+1])
-        print(f"  {name}: row={row:3d}, col={col:2d}")
+    # Bounding box corners
+    corner_names = ['AV-G', 'AV-D', 'AR-G', 'AR-D']
+    print("BOUNDING BOX CORNERS (dans le repère grille):")
+    for i, name in enumerate(corner_names):
+        row = bbox_corners[i*2]
+        col = bbox_corners[i*2+1]
+        print(f"  {name}: row={row:6.1f}, col={col:6.1f}")
     print()
     
-    # Grille EXACTE 32×64 - afficher centre 20×40 (toute la largeur)
-    robot_row_grid = 16  # Robot au centre de la grille 32×64
-    robot_col_grid = 32  # Robot au centre des colonnes
-    print("GRILLE 32×64 (centre 20×40) - EXACTEMENT comme vue par le modèle:")
-    print("Cellules 6.25cm, vision 2×4m FIXE (toute largeur couloir)")
-    print("Colonnes: 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ123456")
-    print("          " + "─" * 40)
-    
-    symbols = {0: '▓', 1: '△', 2: '░', 3: 'R', 4: 'r', 5: 'X'}  # Robot avec info sol dessous
-    
-    for i in range(6, 26):  # Lignes 6-25 (centre 20 lignes)
-        line = f"L{i:2d}: "
+    # Historique des 4 coins (coordonnées relatives)
+    print("HISTORIQUE DES 4 COINS (coordonnées relatives à la position actuelle):")
+    corner_names = ['AV-G', 'AV-D', 'AR-G', 'AR-D']
+    for i in range(5):
+        corners = corners_history[i]  # 8 valeurs
+        steps_ago = (4-i) * 20  # 20 steps par position
+        if steps_ago == 0:
+            print(f"  Actuelle (diff=0):  ", end="")
+        else:
+            print(f"  -{steps_ago:2d} steps:        ", end="")
         
-        # Créer la ligne avec les symboles (toute la largeur)
-        for j in range(12, 52):  # Colonnes 12-51 (centre 40 colonnes)
-            val = int(grid[i, j])
-            line += symbols.get(val, '?')
+        # Afficher les 4 coins
+        corner_str = []
+        for j, name in enumerate(corner_names):
+            row_diff = corners[j*2]
+            col_diff = corners[j*2+1]
+            corner_str.append(f"{name}:({row_diff:+.1f},{col_diff:+.1f})")
+        print(" | ".join(corner_str))
+    print()
+    
+    # Grille 120×60 - afficher TOUTE LA LARGEUR
+    print("GRILLE 120×60 (centre 40×60) - ENTRÉE DIRECTE DU CNN:")
+    print(f"Cellules {env.cell_size}m, vision {env.vision_length}m×{env.vision_width}m")
+    print("Vision Y FIXE: couvre exactement toute la largeur du couloir (3m)")
+    print(f"Robot à ligne 40 (fixe), colonne variable selon sa position Y")
+    print()
+    
+    # En-tête colonnes (toute la largeur)
+    print("    ", end="")
+    for j in range(0, 60):  # TOUTES les colonnes 0-59
+        print(f"{j%10}", end="")
+    print()
+    print("    " + "─" * 60)
+    
+    # Afficher grille avec symboles
+    for i in range(20, 60):  # Lignes 20-59 (centre 40 lignes)
+        line = f"{i:3d}|"
         
-        # Distance relative au robot (robot au centre ligne 16)
-        relative_dist = (i - 16) * env.cell_size  # Robot à ligne 16
-        print(f"{line} ({relative_dist:+.3f}m)")
+        for j in range(0, 60):  # TOUTES les colonnes 0-59
+            val = grid[i, j]
+            
+            # Vérifier si c'est un coin de la bounding box
+            is_corner = False
+            corner_type = ''
+            for k, name in enumerate(corner_names):
+                corner_row = round(bbox_corners[k*2])
+                corner_col = round(bbox_corners[k*2+1])
+                if corner_row == i and corner_col == j:
+                    is_corner = True
+                    if 'AV' in name:
+                        corner_type = 'A'  # Avant
+                    else:
+                        corner_type = 'R'  # aRrière
+                    break
+            
+            if is_corner:
+                symbol = corner_type  # A pour avant, A pour arrière
+            else:
+                # Symboles selon valeur normalisée
+                if val == 0.0:
+                    symbol = '▓'  # Sol
+                elif val == 0.5:
+                    symbol = '△'  # Rampe
+                elif val == 1.0:
+                    symbol = '░'  # Trou
+                else:
+                    symbol = '?'  # Valeur inattendue
+            
+            line += symbol
+        
+        # Distance relative au robot (robot théoriquement à ligne 40)
+        relative_dist = (i - 40) * env.cell_size
+        print(f"{line} {relative_dist:+.2f}m")
     
     print()
     print("LÉGENDE:")
-    print("  ▓ = sol (0)    △ = rampe (1)    ░ = trou (2)")
-    print("  R = robot sur sol (3)    r = robot sur rampe (4)    X = robot sur trou (5)")
-    print("  Vision: 32×64 cellules de 6.25cm = 2×4m FIXE (toute largeur couloir)")
-    print("  Robot ligne 16 (X centré), colonne variable selon Y. Voit TOUJOURS toute largeur couloir")
+    print("  ▓ = sol (0.0)    △ = rampe (0.5)    ░ = trou (1.0)")
+    print("  A = coin AVANT de la bounding box    R = coin ARRIÈRE de la bounding box")
+    print(f"  Vision: {env.grid_rows}×{env.grid_cols} cellules de {env.cell_size}m")
+    print(f"  Couvre: {env.vision_length}m devant/derrière × {env.vision_width}m largeur FIXE")
+    print(f"  Vision Y FIXE: toujours centrée sur le couloir, pas sur le robot")
+    print(f"  Robot représenté par ses 4 coins de bounding box (pas rempli dans la grille)")
     print()
-    print("OBSERVATION TOTALE:")
-    print(f"  Robot state: 6 valeurs {robot_state}")
-    print(f"  Wheel positions: 8 valeurs {wheel_positions}")
-    print(f"  Grid: 2048 valeurs (32×64)")
-    print(f"  TOTAL: 2062 valeurs pour le réseau de neurones")
-    print("="*80)
+    
+    # Statistiques de la grille
+    unique_vals, counts = np.unique(grid, return_counts=True)
+    print("STATISTIQUES GRILLE:")
+    total_cells = grid.size
+    for val, count in zip(unique_vals, counts):
+        pct = 100 * count / total_cells
+        if val == 0.0:
+            print(f"  Sol (0.0):    {count:5d} cellules ({pct:5.1f}%)")
+        elif val == 0.5:
+            print(f"  Rampe (0.5):  {count:5d} cellules ({pct:5.1f}%)")
+        elif val == 0.75:
+            print(f"  Robot (0.75): {count:5d} cellules ({pct:5.1f}%)")
+        elif val == 1.0:
+            print(f"  Trou (1.0):   {count:5d} cellules ({pct:5.1f}%)")
+        else:
+            print(f"  Autre ({val:.2f}): {count:5d} cellules ({pct:5.1f}%)")
+    
+    print()
+    print("STRUCTURE OBSERVATION POUR CNN:")
+    print(f"  1. Robot state:      6 valeurs {robot_state}")
+    print(f"  2. BBox corners:     8 valeurs {bbox_corners}")
+    print(f"  3. Corners history:  40 valeurs (5 positions × 8 coords relatives)")
+    print(f"  4. Grille unifiée:   {grid.size} valeurs (120×60)")
+    print(f"  TOTAL:              {obs.shape[0]} valeurs → CNN")
+    print("="*100)
     
     env.close()
 
+def test_multiple_positions(corridor_xml="corridor_100.xml"):
+    """Teste plusieurs positions pour voir la cohérence."""
+    positions = [
+        (10.0, 0.0, 0.0),      # Début, centré
+        (25.0, -0.5, 0.1),     # Milieu, légèrement à gauche
+        (50.0, 1.0, -0.2),     # Milieu, à droite
+        (75.0, 0.0, 0.0),      # Fin, centré
+    ]
+    
+    for i, (x, y, angle) in enumerate(positions):
+        print(f"\n{'='*20} POSITION {i+1} {'='*20}")
+        visualize_cnn_input(corridor_xml, x, y, angle)
+        if i < len(positions) - 1:
+            input("Appuyez sur Entrée pour la position suivante...")
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Visualize corridor cell map")
+    parser = argparse.ArgumentParser(description="Visualise l'entrée exacte du CNN simplifié")
     parser.add_argument("--corridor", type=str, default="corridor_100.xml", 
-                       help="Corridor XML file to visualize (default: corridor_100.xml)")
-    parser.add_argument("--model-vision", action="store_true",
-                       help="Show EXACT model vision with random spawn and wheel positions")
+                       help="Fichier XML du corridor (défaut: corridor_100.xml)")
+    parser.add_argument("--x", type=float, help="Position X du robot (défaut: aléatoire)")
+    parser.add_argument("--y", type=float, help="Position Y du robot (défaut: aléatoire)")
+    parser.add_argument("--angle", type=float, help="Angle du robot en DEGRÉS (défaut: aléatoire)")
+    parser.add_argument("--test-multiple", action="store_true",
+                       help="Teste plusieurs positions prédéfinies")
+    parser.add_argument("--full-map", action="store_true",
+                       help="Affiche la carte complète du corridor")
     args = parser.parse_args()
     
-    if args.model_vision:
-        visualize_model_exact_vision(corridor_xml=args.corridor, random_spawn=True)
+    if args.test_multiple:
+        test_multiple_positions(args.corridor)
+    elif args.full_map:
+        visualize_full_corridor(args.corridor)
     else:
-        visualize_full_corridor(corridor_xml=args.corridor)
+        # Convertir angle de degrés en radians si fourni
+        angle_rad = np.radians(args.angle) if args.angle is not None else None
+        visualize_cnn_input(args.corridor, args.x, args.y, angle_rad)

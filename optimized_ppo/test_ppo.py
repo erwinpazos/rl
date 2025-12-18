@@ -26,46 +26,71 @@ class Agent(nn.Module):
     def __init__(self, obs_dim, act_dim):
         super().__init__()
         
-        self.robot_dim = 14  # pos(3) + vel(3) + wheels(8)
-        self.grid_dim = obs_dim - self.robot_dim  # 256 (16×16)
+        # Observation: pos(3) + vel(3) + bbox(8) + history(40) + grid(7200) = 7254
+        self.robot_state_dim = 6   # pos(3) + vel(3)
+        self.bbox_dim = 8          # 4 coins × 2 coords
+        self.history_dim = 40      # 5 positions × 8 coords (4 coins × 2) = 40
+        self.grid_dim = 7200       # 120×60 = 7200
         
+        # MLP pour état robot (position + vitesse + bbox)
         self.robot_net = nn.Sequential(
-            layer_init(nn.Linear(self.robot_dim, 64)),
+            layer_init(nn.Linear(self.robot_state_dim + self.bbox_dim, 64)),  # 14
             nn.Tanh(),
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
         )
         
-        # CNN grille 8×8 - ULTRA SIMPLE (même architecture que train_ppo.py)
-        self.grid_net = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, stride=1, padding=1),  # 8×8 -> 8×8
-            nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),  # 8×8 -> 4×4
-            nn.ReLU(),
-            nn.Flatten(),  # 32 × 4 × 4 = 512
-            layer_init(nn.Linear(512, 64)),
+        # MLP pour historique des 4 coins (anticipation)
+        self.history_net = nn.Sequential(
+            layer_init(nn.Linear(self.history_dim, 64)),
+            nn.Tanh(),
+            layer_init(nn.Linear(64, 32)),
             nn.Tanh(),
         )
         
+        # CNN UNIQUE pour grille 120×60
+        self.cnn = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),   # 120×60 -> 60×30
+            nn.ReLU(),
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # 60×30 -> 30×15
+            nn.ReLU(),
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # 30×15 -> 15×8
+            nn.ReLU(),
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),# 15×8 -> 8×4
+            nn.ReLU(),
+            nn.Flatten(),  # 256 × 8 × 4 = 8192
+            layer_init(nn.Linear(8192, 256)),
+            nn.Tanh(),
+        )
+        
+        # Backbone combiné
         self.backbone = nn.Sequential(
-            layer_init(nn.Linear(64 + 64, 128)),
+            layer_init(nn.Linear(64 + 32 + 256, 256)),  # robot + history + cnn
             nn.Tanh(),
-            layer_init(nn.Linear(128, 64)),
+            layer_init(nn.Linear(256, 128)),
             nn.Tanh(),
         )
         
-        self.actor_mean = layer_init(nn.Linear(64, act_dim), std=0.01)
+        self.actor_mean = layer_init(nn.Linear(128, act_dim), std=0.01)
         self.actor_logstd = nn.Parameter(torch.zeros(1, act_dim))
-        self.critic = layer_init(nn.Linear(64, 1), std=1.0)
+        self.critic = layer_init(nn.Linear(128, 1), std=1.0)
     
     def forward(self, obs):
-        robot = obs[:, :self.robot_dim]
-        grid = obs[:, self.robot_dim:].view(-1, 1, 8, 8)
+        # Décoder observation
+        robot_state = obs[:, :self.robot_state_dim]  # 0:6
+        bbox = obs[:, self.robot_state_dim:self.robot_state_dim+self.bbox_dim]  # 6:14
+        robot_and_bbox = torch.cat([robot_state, bbox], dim=1)  # 14 valeurs
         
-        robot_feat = self.robot_net(robot)
-        grid_feat = self.grid_net(grid)
+        history_start = self.robot_state_dim + self.bbox_dim  # 14
+        history = obs[:, history_start:history_start+self.history_dim]  # 14:54
+        grid = obs[:, history_start+self.history_dim:].view(-1, 1, 120, 60)  # 54:7254
         
-        combined = torch.cat([robot_feat, grid_feat], dim=1)
+        # Traiter séparément
+        robot_feat = self.robot_net(robot_and_bbox)
+        history_feat = self.history_net(history)
+        grid_feat = self.cnn(grid)
+        
+        combined = torch.cat([robot_feat, history_feat, grid_feat], dim=1)
         return self.backbone(combined)
     
     def get_action(self, obs, deterministic=False):
@@ -83,32 +108,36 @@ def display_vision(obs, step, ret):
     """Afficher vision robot dans terminal."""
     print("\033[2J\033[H", end="")
     
-    robot = obs[:14]
-    grid = obs[14:].reshape(8, 8)
+    # Décoder observation: pos(3) + vel(3) + bbox(8) + history(40) + grid(7200)
+    robot = obs[:6]
+    bbox = obs[6:14]
+    grid = obs[54:].reshape(120, 60)
     
-    print("=" * 60)
+    print("=" * 70)
     print(f"Step: {step} | Return: {ret:.1f}")
     print(f"Position: x={robot[0]:.2f}m, y={robot[1]:.2f}m, z={robot[2]:.2f}m")
     print(f"Velocity: vx={robot[3]:.2f}, vy={robot[4]:.2f}, vz={robot[5]:.2f}")
-    print("=" * 60)
-    print("\nVision 8×8 (2×2m autour du robot, robot au centre):")
+    print("=" * 70)
+    print("\nVision 120×60 (centre 20×20 autour du robot):")
     print("-" * 40)
     
-    symbols = {0: '▓', 1: '△', 2: '░'}
-    colors = {0: '\033[92m', 1: '\033[93m', 2: '\033[91m'}
-    reset = '\033[0m'
-    
-    for i in range(7, -1, -1):
-        relative_dist = (i - 2) * 0.25  # Robot à la ligne 2
-        line = f"{relative_dist:+4.2f}m: "
-        for val in grid[i]:
-            v = int(val)
-            line += f"{colors.get(v, '')}{symbols.get(v, '?')}{reset}"
+    # Afficher grille centre (lignes 30-49, colonnes 20-39)
+    for i in range(30, 50):
+        relative_dist = (i - 40) * 0.05
+        line = f"{relative_dist:+.2f}m: "
+        for j in range(20, 40):
+            val = grid[i, j]
+            if val == 0.0:
+                line += '▓'
+            elif val == 0.5:
+                line += '△'
+            else:
+                line += '░'
         print(line)
     
     print("-" * 40)
-    print("Légende: \033[92m▓\033[0m=sol  \033[93m△\033[0m=rampe  \033[91m░\033[0m=trou")
-    print("=" * 60)
+    print("Légende: ▓=sol  △=rampe  ░=trou")
+    print("=" * 70)
 
 
 def test(model_path, corridor_xml, num_episodes, render, show_vision):

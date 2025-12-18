@@ -25,52 +25,55 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class Agent(nn.Module):
-    """CNN + MLP optimisé pour GPU."""
+    """CNN UNIQUE + MLP simplifié."""
     
     def __init__(self, obs_dim, act_dim):
         super().__init__()
         
-        self.robot_dim = 14  # pos(3) + vel(3) + wheels(8)
-        self.env_grid_dim = 2048  # Couche 1: environnement 32×64
-        self.robot_grid_dim = 2048  # Couche 2: robot 32×64
+        # Observation: pos(3) + vel(3) + bbox(8) + history(40) + grid(7200) = 7254
+        self.robot_state_dim = 6   # pos(3) + vel(3)
+        self.bbox_dim = 8          # 4 coins × 2 coords
+        self.history_dim = 40      # 5 positions × 8 coords (4 coins × 2) = 40
+        self.grid_dim = 7200       # 120×60 = 7200
         
-        # MLP robot
+        # MLP pour état robot (position + vitesse)
         self.robot_net = nn.Sequential(
-            layer_init(nn.Linear(self.robot_dim, 64)),
+            layer_init(nn.Linear(self.robot_state_dim + self.bbox_dim, 64)),  # 6 + 8 = 14
             nn.Tanh(),
             layer_init(nn.Linear(64, 64)),
             nn.Tanh(),
         )
         
-        # CNN COUCHE 1: Environnement (sol/trou/rampe)
-        self.env_cnn = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, stride=2, padding=1),  # 32×64 -> 16×32
-            nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1),  # 16×32 -> 8×16
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # 8×16 -> 4×8
-            nn.ReLU(),
-            nn.Flatten(),  # 64 × 4 × 8 = 2048
-            layer_init(nn.Linear(2048, 128)),
+        # MLP pour historique des 4 coins (anticipation)
+        self.history_net = nn.Sequential(
+            layer_init(nn.Linear(self.history_dim, 64)),  # Plus de neurones car plus de données
+            nn.Tanh(),
+            layer_init(nn.Linear(64, 32)),
             nn.Tanh(),
         )
         
-        # CNN COUCHE 2: Robot (position du corps)
-        self.robot_cnn = nn.Sequential(
-            nn.Conv2d(1, 8, kernel_size=3, stride=2, padding=1),   # 32×64 -> 16×32
+        # CNN UNIQUE pour grille 120×60 (environnement + robot intégré)
+        self.cnn = nn.Sequential(
+            # 120×60 -> 60×30
+            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(8, 16, kernel_size=3, stride=2, padding=1),  # 16×32 -> 8×16
+            # 60×30 -> 30×15  
+            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=3, stride=2, padding=1), # 8×16 -> 4×8
+            # 30×15 -> 15×8
+            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
             nn.ReLU(),
-            nn.Flatten(),  # 32 × 4 × 8 = 1024
-            layer_init(nn.Linear(1024, 64)),
+            # 15×8 -> 8×4
+            nn.Conv2d(128, 256, kernel_size=3, stride=2, padding=1),
+            nn.ReLU(),
+            nn.Flatten(),  # 256 × 8 × 4 = 8192
+            layer_init(nn.Linear(8192, 256)),
             nn.Tanh(),
         )
         
-        # Backbone combiné - TROIS SOURCES
+        # Backbone combiné - QUATRE SOURCES
         self.backbone = nn.Sequential(
-            layer_init(nn.Linear(64 + 128 + 64, 256)),  # robot_state + env_cnn + robot_cnn
+            layer_init(nn.Linear(64 + 32 + 256, 256)),  # robot_state + history + cnn
             nn.Tanh(),
             layer_init(nn.Linear(256, 128)),
             nn.Tanh(),
@@ -82,18 +85,22 @@ class Agent(nn.Module):
         self.critic = layer_init(nn.Linear(128, 1), std=1.0)
     
     def forward(self, obs):
-        # Décoder les DEUX COUCHES
-        robot_state = obs[:, :self.robot_dim]
-        env_grid = obs[:, self.robot_dim:self.robot_dim+self.env_grid_dim].view(-1, 1, 32, 64)
-        robot_grid = obs[:, self.robot_dim+self.env_grid_dim:].view(-1, 1, 32, 64)
+        # Décoder observation: pos(3) + vel(3) + bbox(8) + history(40) + grid(7200)
+        robot_state = obs[:, :self.robot_state_dim]  # 0:6
+        bbox = obs[:, self.robot_state_dim:self.robot_state_dim+self.bbox_dim]  # 6:14
+        robot_and_bbox = torch.cat([robot_state, bbox], dim=1)  # 14 valeurs
         
-        # Traiter chaque couche séparément
-        robot_feat = self.robot_net(robot_state)
-        env_feat = self.env_cnn(env_grid)      # CNN pour environnement
-        robot_pos_feat = self.robot_cnn(robot_grid)  # CNN pour position robot
+        history_start = self.robot_state_dim + self.bbox_dim  # 14
+        history = obs[:, history_start:history_start+self.history_dim]  # 14:54
+        grid = obs[:, history_start+self.history_dim:].view(-1, 1, 120, 60)  # 54:7254
         
-        # Combiner les trois sources d'information
-        combined = torch.cat([robot_feat, env_feat, robot_pos_feat], dim=1)
+        # Traiter séparément
+        robot_feat = self.robot_net(robot_and_bbox)  # 14 → 64
+        history_feat = self.history_net(history)      # 40 → 32
+        grid_feat = self.cnn(grid)                    # 7200 → 256
+        
+        # Combiner les trois sources
+        combined = torch.cat([robot_feat, history_feat, grid_feat], dim=1)
         return self.backbone(combined)
     
     def get_value(self, obs):
@@ -119,7 +126,7 @@ class Agent(nn.Module):
 def make_env(corridor_xml):
     """Factory pour environnement."""
     def thunk():
-        env = CorridorEnv(corridor_xml=corridor_xml, max_steps=300)  # Commencer court
+        env = CorridorEnv(corridor_xml=corridor_xml, max_steps=3000)  # 3000 steps par épisode
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env = gym.wrappers.ClipAction(env)
         return env
@@ -127,16 +134,11 @@ def make_env(corridor_xml):
 
 
 def update_curriculum(envs, debug_env, iteration, num_iterations):
-    """Curriculum progressif: augmenter max_steps avec les itérations."""
-    # Progression de 1000 à 3000 steps (plus strict pour forcer apprentissage)
-    min_steps = 1000
-    max_steps = 3000
-    progress = iteration / num_iterations
+    """Pas de curriculum - toujours 3000 steps."""
+    # Toujours 3000 steps maintenant
+    current_steps = 3000
     
-    # Progression linéaire
-    current_steps = int(min_steps + (max_steps - min_steps) * progress)
-    
-    # Mettre à jour tous les environnements
+    # Mettre à jour tous les environnements (au cas où)
     try:
         # Pour les envs vectorisés, on doit accéder aux envs individuels
         for i in range(len(envs.envs)):
@@ -197,45 +199,45 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
                 # Afficher info + vision
                 if step % 25 == 0:
                     x = debug_env.data.qpos[0]
-                    print(f"Step {step}: x={x:.2f}m, reward={reward:.3f}, return={ep_return:.1f}")
+                    stabilizing = " (STABILISATION)" if step < debug_env.stabilization_steps else ""
+                    print(f"Step {step}: x={x:.2f}m, reward={reward:.3f}, return={ep_return:.1f}{stabilizing}")
                     
-                    # Décoder l'observation - DEUX COUCHES
+                    # Décoder l'observation AVEC HISTORIQUE DES 4 COINS
                     robot_state = obs[:6]
-                    wheel_pos = obs[6:14]
-                    env_grid = obs[14:14+2048].reshape(32, 64)  # Couche 1: environnement
-                    robot_grid = obs[14+2048:].reshape(32, 64)  # Couche 2: robot
+                    bbox_corners = obs[6:14]
+                    corners_history = obs[14:54].reshape(5, 8)
+                    grid = obs[54:].reshape(120, 60)
                     
                     print(f"  Robot: pos=({robot_state[0]:.2f}, {robot_state[1]:.2f}, {robot_state[2]:.2f}), vel=({robot_state[3]:.2f}, {robot_state[4]:.2f}, {robot_state[5]:.2f})")
                     
-                    # Afficher positions des roues
-                    wheel_names = ['FL', 'FR', 'RL', 'RR']
-                    wheel_str = ", ".join([f"{name}:({wheel_pos[i*2]:.0f},{wheel_pos[i*2+1]:.0f})" for i, name in enumerate(wheel_names)])
-                    print(f"  Roues (row,col): {wheel_str}")
+                    # Afficher bounding box corners
+                    corner_names = ['AV-G', 'AV-D', 'AR-G', 'AR-D']
+                    bbox_str = ", ".join([f"{name}:({bbox_corners[i*2]:.0f},{bbox_corners[i*2+1]:.0f})" for i, name in enumerate(corner_names)])
+                    print(f"  BBox (row,col): {bbox_str}")
                     
-                    # Afficher les DEUX COUCHES (échantillon centre)
-                    print("  COUCHE 1 - Environnement (centre 16×16):")
-                    for i in range(8, 24):  # Lignes 8-23 (centre)
-                        line = "    ENV: "
-                        for j in range(24, 40):  # Colonnes centre
-                            val = env_grid[i, j]
+                    # Afficher historique (derniers coins relatifs)
+                    last_corners = corners_history[-1]  # 8 valeurs
+                    avg_row_diff = np.mean([last_corners[i*2] for i in range(4)])
+                    avg_col_diff = np.mean([last_corners[i*2+1] for i in range(4)])
+                    print(f"  Historique: derniers coins relatifs avg_row={avg_row_diff:+.1f}, avg_col={avg_col_diff:+.1f}")
+                    
+                    # Afficher grille unique (échantillon centre 20×20)
+                    print("  GRILLE UNIFIÉE (centre 20×20):")
+                    for i in range(30, 50):  # Lignes 30-49 (autour du robot à ligne 40)
+                        line = "    "
+                        for j in range(30, 50):  # Colonnes 30-49 (autour du robot à colonne 40)
+                            val = grid[i, j]
                             if val == 0.0:
                                 line += '▓'  # Sol
                             elif val == 0.5:
                                 line += '△'  # Rampe
+                            elif val == 0.75:
+                                line += 'R'  # Robot
                             else:  # val == 1.0
                                 line += '░'  # Trou
-                        relative_dist = (i - 16) * 0.0625
-                        print(f"    {relative_dist:+.3f}m: {line}")
-                    
-                    print("  COUCHE 2 - Robot (centre 16×16):")
-                    for i in range(8, 24):  # Lignes 8-23 (centre)
-                        line = "    ROB: "
-                        for j in range(24, 40):  # Colonnes centre
-                            val = robot_grid[i, j]
-                            line += 'R' if val > 0.5 else '░'
-                        relative_dist = (i - 16) * 0.0625
-                        print(f"    {relative_dist:+.3f}m: {line}")
-                    print("    (ENV: ▓=sol, △=rampe, ░=trou | ROB: R=robot, ░=vide)")
+                        relative_dist = (i - 40) * 0.05  # Distance relative au robot
+                        print(f"    {relative_dist:+.2f}m: {line}")
+                    print("    (▓=sol, △=rampe, R=robot, ░=trou)")
                 
                 v.sync()
                 time.sleep(0.05)  # 20 FPS
@@ -297,7 +299,7 @@ def train(
     envs = gym.vector.AsyncVectorEnv([make_env(corridor_xml) for _ in range(num_envs)])
     
     # Environnement de debug pour visualisation
-    debug_env = CorridorEnv(corridor_xml=corridor_xml)
+    debug_env = CorridorEnv(corridor_xml=corridor_xml, max_steps=3000)
     
     obs_dim = envs.single_observation_space.shape[0]
     act_dim = envs.single_action_space.shape[0]
