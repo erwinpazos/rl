@@ -59,9 +59,9 @@ class CorridorEnv(gym.Env):
         self.grid_cols = int(self.vision_width / self.cell_size)   # 30 colonnes
         self.robot_row_in_grid = int(self.vision_behind / self.cell_size)  # 5 (0.5m derrière)
         
-        # Dimensions robot (bounding box) - ALIGNÉES sur la grille
-        self.robot_length = 0.60  # 6 cellules (6 × 0.1)
-        self.robot_width = 0.40   # 4 cellules (4 × 0.1)
+        # Dimensions robot (bounding box) - ENGLOBENT TOUT LE ROBOT + ROUES
+        self.robot_length = 1.10  # 11 cellules (empattement 0.7m + diamètre roues 0.4m = 1.1m)
+        self.robot_width = 0.70   # 7 cellules (voie 0.6m + dépassement roues ~0.1m = 0.7m)
         
         # Historique des positions pour anticipation (AVANT les espaces)
         self.history_interval = 10  # Sauvegarder position tous les 10 steps (plus fréquent)
@@ -205,8 +205,8 @@ class CorridorEnv(gym.Env):
         
         # 4 coins de la bounding box dans le repère LOCAL du robot
         # X = avant/arrière (longueur), Y = gauche/droite (largeur)
-        half_length = self.robot_length / 2  # 0.3m = 6 cellules
-        half_width = self.robot_width / 2    # 0.2m = 4 cellules
+        half_length = self.robot_length / 2  # 0.55m = 11 cellules
+        half_width = self.robot_width / 2    # 0.35m = 7 cellules
         
         # Coins dans le repère local (X avant, Y gauche)
         corners_local = [
@@ -381,8 +381,8 @@ class CorridorEnv(gym.Env):
         sin_a = np.sin(angle)
         
         # 4 coins de la bounding box dans le repère LOCAL du robot
-        half_length = self.robot_length / 2  # 0.3m
-        half_width = self.robot_width / 2    # 0.2m
+        half_length = self.robot_length / 2  # 0.45m
+        half_width = self.robot_width / 2    # 0.35m
         
         corners_local = [
             ( half_length,  half_width),  # avant-gauche
