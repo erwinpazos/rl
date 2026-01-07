@@ -39,25 +39,25 @@ Ce projet implémente un agent PPO (Proximal Policy Optimization) pour naviguer 
 - **Voie totale**: 0.6m (entre roues gauche/droite)
 
 **Bounding box englobante** (pour l'algorithme):
-- **Dimensions**: 0.9m × 0.7m (englobe robot + roues)
-  - **Longueur**: 0.9m = empattement 0.7m + rayon roues avant/arrière 0.2m
-  - **Largeur**: 0.7m = voie 0.6m + dépassement latéral des roues ~0.1m
-- **Justification**: Bounding box réaliste qui englobe toutes les parties (châssis + roues)
+- **Dimensions**: 1.1m × 0.7m (englobe robot + roues + marge)
+  - **Longueur**: 1.1m = châssis 0.8m + dépassement roues avant/arrière 0.15m × 2 = 1.1m
+  - **Largeur**: 0.7m = châssis 0.6m + dépassement roues latérales 0.03m × 2 + marge = 0.7m
+- **Justification**: Bounding box réaliste qui englobe toutes les parties (châssis + roues + petite marge)
 - **Sécurité**: Détection précise des collisions avant contact physique
 
 **Mapping bounding box → robot**:
-- **Longueur**: 0.9m = ±0.45m du centre (englobe roues avant/arrière)
-- **Largeur**: 0.7m = ±0.35m du centre (englobe roues gauche/droite)
-- **En cellules**: 9×7 cellules de 0.1m (bounding box couvre 63 cellules)
+- **Longueur**: 1.1m = ±0.55m du centre (englobe roues avant/arrière + rayon)
+- **Largeur**: 0.7m = ±0.35m du centre (englobe roues gauche/droite + épaisseur + marge)
+- **En cellules**: 11×7 cellules de 0.1m (bounding box couvre 77 cellules)
 
 **4 coins dans le repère robot**:
 ```python
 # Coins dans le repère local robot (X=avant, Y=gauche)
 corners_local = [
-    (+0.45, +0.35),  # avant-gauche (englobe roue FL + rayon)
-    (+0.45, -0.35),  # avant-droite (englobe roue FR + rayon)
-    (-0.45, +0.35),  # arrière-gauche (englobe roue RL + rayon)
-    (-0.45, -0.35),  # arrière-droite (englobe roue RR + rayon)
+    (+0.55, +0.35),  # avant-gauche (englobe roue FL + rayon 0.2m)
+    (+0.55, -0.35),  # avant-droite (englobe roue FR + rayon 0.2m)
+    (-0.55, +0.35),  # arrière-gauche (englobe roue RL + rayon 0.2m)
+    (-0.55, -0.35),  # arrière-droite (englobe roue RR + rayon 0.2m)
 ]
 ```
 
