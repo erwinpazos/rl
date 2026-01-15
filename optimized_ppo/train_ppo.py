@@ -230,10 +230,10 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
                     bbox_positions = [(int(bbox_corners[i*2]), int(bbox_corners[i*2+1])) for i in range(4)]
                     
                     # Afficher grille (20 lignes × TOUTE la largeur 30 colonnes)
-                    print("  GRILLE (lignes 0-19, toute largeur 30 cols):")
-                    for i in range(20):  # Lignes 0-19 (robot à ligne 5)
+                    print("  GRILLE (lignes 0-19, centrée sur robot):")
+                    for i in range(20):  # Lignes 0-19 (robot à ligne 6)
                         line = "    "
-                        for j in range(30):  # TOUTES les colonnes (0-29 = 3m)
+                        for j in range(30):  # TOUTES les colonnes (0-29, robot au centre col 15)
                             # Vérifier si c'est un coin de la bounding box
                             is_corner = False
                             for idx, (row, col) in enumerate(bbox_positions):
@@ -243,15 +243,17 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
                                     break
                             if not is_corner:
                                 val = grid[i, j]
-                                if val == 0.0:
+                                if val == -1.0:
+                                    line += 'X'  # Extérieur
+                                elif val == 0.0:
                                     line += '▓'  # Sol
                                 elif val == 0.5:
                                     line += '△'  # Bump
                                 else:  # val == 1.0
                                     line += '░'  # Trou
-                        relative_dist = (i - 5) * 0.1  # Distance relative au robot (5 = 0.5m derrière)
+                        relative_dist = (i - 6) * 0.1  # Distance relative au robot (6 = 0.6m derrière)
                         print(f"    {relative_dist:+.1f}m: {line}")
-                    print("    (▓=sol, △=bump, ░=trou, A=avant bbox, R=arrière bbox)")
+                    print("    (X=extérieur, ▓=sol, △=bump, ░=trou, A=avant bbox, R=arrière bbox)")
                 
                 v.sync()
                 time.sleep(0.05)  # 20 FPS

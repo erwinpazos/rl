@@ -50,14 +50,14 @@ class CorridorEnv(gym.Env):
         self.corridor_width = 3.0
         self.cell_size = 0.1  # 10cm par cellule (plus gros = plus facile à apprendre)
         
-        # Grille vision: 5.5m devant + 0.5m derrière = 6m × 3m largeur
-        self.vision_behind = 0.5  # 0.5m derrière (5 cellules)
-        self.vision_front = 5.5   # 5.5m devant (55 cellules)
+        # Grille vision: 5.2m devant + 0.8m derrière = 6m × 3m largeur
+        self.vision_behind = 0.8  # 0.8m derrière (8 cellules) - assez pour voir coins arrière même inclinés
+        self.vision_front = 5.2   # 5.2m devant (52 cellules)
         self.vision_length = self.vision_behind + self.vision_front  # 6m total
         self.vision_width = 3.0   # 3m largeur (exactement la largeur du couloir)
         self.grid_rows = int(self.vision_length / self.cell_size)  # 60 lignes
         self.grid_cols = int(self.vision_width / self.cell_size)   # 30 colonnes
-        self.robot_row_in_grid = int(self.vision_behind / self.cell_size)  # 5 (0.5m derrière)
+        self.robot_row_in_grid = round(self.vision_behind / self.cell_size)  # 8 (0.8m derrière)
         
         # Dimensions robot (bounding box) - ENGLOBENT TOUT LE ROBOT + ROUES
         self.robot_length = 1.10  # 11 cellules (empattement 0.7m + diamètre roues 0.4m = 1.1m)
@@ -190,9 +190,9 @@ class CorridorEnv(gym.Env):
         ]).astype(np.float32)       # Total: 6 + 8 + 88 + 1800 = 1902 valeurs
     
     def _get_robot_bbox_corners(self, robot_x, robot_y):
-        """Position des 4 coins de la bounding box dans le repère relatif de la grille.
+        """Position des 4 coins de la bounding box dans le repère relatif de la grille CENTRÉE SUR LE ROBOT.
         
-        La bounding box est un rectangle FIXE de 0.6m × 0.4m (12×8 cellules) qui pivote
+        La bounding box est un rectangle FIXE de 1.1m × 0.7m qui pivote
         avec l'angle du robot. Les dimensions restent constantes quelle que soit l'orientation.
         """
         # Récupérer orientation robot (quaternion → angle autour de Z)
@@ -205,8 +205,8 @@ class CorridorEnv(gym.Env):
         
         # 4 coins de la bounding box dans le repère LOCAL du robot
         # X = avant/arrière (longueur), Y = gauche/droite (largeur)
-        half_length = self.robot_length / 2  # 0.55m = 11 cellules
-        half_width = self.robot_width / 2    # 0.35m = 7 cellules
+        half_length = self.robot_length / 2  # 0.55m = 5.5 cellules
+        half_width = self.robot_width / 2    # 0.35m = 3.5 cellules
         
         # Coins dans le repère local (X avant, Y gauche)
         corners_local = [
@@ -218,11 +218,9 @@ class CorridorEnv(gym.Env):
         
         corners_grid = []
         
-        # Position du robot dans la grille (vision fixe)
-        robot_grid_row = self.robot_row_in_grid  # 1m derrière = 10 cellules (fixe en X)
-        
-        # Position Y du robot dans la grille
-        robot_grid_col = int((robot_y + self.corridor_width/2) / self.cell_size)
+        # Position du robot dans la grille CENTRÉE
+        robot_grid_row = self.robot_row_in_grid  # 5 (0.5m derrière, fixe en X)
+        robot_grid_col = self.grid_cols // 2      # 15 (centre de la grille, fixe en Y)
         
         for local_x, local_y in corners_local:
             # Rotation 2D autour du centre du robot
@@ -233,7 +231,7 @@ class CorridorEnv(gym.Env):
             
             # Convertir en cellules de grille
             # row augmente vers l'avant (X positif)
-            # col augmente vers la gauche (Y positif)
+            # col augmente vers la droite (Y positif)
             delta_row = round(world_offset_x / self.cell_size)
             delta_col = round(world_offset_y / self.cell_size)
             
@@ -291,17 +289,19 @@ class CorridorEnv(gym.Env):
         return np.array(history_obs, dtype=np.float32)
     
     def _get_grid_obs(self, robot_x, robot_y):
-        """Grille unique 60×30 avec environnement."""
+        """Grille unique 60×30 avec environnement, CENTRÉE SUR LE ROBOT."""
         grid = np.zeros((self.grid_rows, self.grid_cols), dtype=np.float32)
         
         # Position du robot dans la grille monde
         robot_row_world = int(robot_x / self.cell_size)
+        robot_col_world = int((robot_y + self.corridor_width/2) / self.cell_size)
         
-        # Limites de la vision (5m devant, 1m derrière)
-        vision_start_row = robot_row_world - self.robot_row_in_grid  # 1m derrière
+        # Limites de la vision (0.5m derrière, 5.5m devant)
+        vision_start_row = robot_row_world - self.robot_row_in_grid  # 0.5m derrière
         
-        # Vision Y FIXE : toujours toute la largeur du couloir (3m = 30 cellules)
-        vision_start_col = 0  # Commence à y=-1.5m
+        # Vision Y CENTRÉE SUR LE ROBOT : 15 cellules de chaque côté (1.5m)
+        vision_center_col = self.grid_cols // 2  # 15 (centre de la grille 30 colonnes)
+        vision_start_col = robot_col_world - vision_center_col
         
         # Remplir la grille avec l'environnement
         for i in range(self.grid_rows):
@@ -310,12 +310,14 @@ class CorridorEnv(gym.Env):
                 world_row = vision_start_row + i
                 world_col = vision_start_col + j
                 
-                # Vérifier si dans les limites du couloir
+                # Calculer position Y réelle dans le monde
                 world_y = (world_col * self.cell_size) - self.corridor_width/2
                 
-                if world_col < 0 or world_y < -self.corridor_width/2 or world_y > self.corridor_width/2:
-                    # En dehors du couloir = trou
-                    grid[i, j] = 1.0
+                # Vérifier si en dehors du couloir
+                if world_col < 0 or world_col >= int(self.corridor_width / self.cell_size) or \
+                   world_y < -self.corridor_width/2 or world_y > self.corridor_width/2:
+                    # En dehors du couloir = valeur distincte -1.0
+                    grid[i, j] = -1.0
                 else:
                     # Chercher dans la carte des cellules
                     cell_type = self.cell_map.get((world_row, world_col), 2)  # Défaut trou
@@ -358,10 +360,7 @@ class CorridorEnv(gym.Env):
             info['reason'] = 'flipped'
             return -10.0, True, info
         
-        # Échec: sorti du couloir (vérifier si un coin de la bounding box sort)
-        if self._is_out_of_bounds(x, y):
-            info['reason'] = 'out_of_bounds'
-            return -10.0, True, info
+        # Pas de vérification out_of_bounds : le robot tombera naturellement dans le vide
         
         # Récompense SIMPLE: juste la progression en X
         delta_x = x - self.prev_x
@@ -370,41 +369,6 @@ class CorridorEnv(gym.Env):
         
         info['reason'] = None
         return reward, terminated, info
-    
-    def _is_out_of_bounds(self, robot_x, robot_y):
-        """Vérifier si un des 4 coins de la bounding box sort du corridor."""
-        # Récupérer orientation robot
-        quat = self.data.qpos[3:7]
-        angle = 2 * np.arctan2(quat[3], quat[0])
-        
-        cos_a = np.cos(angle)
-        sin_a = np.sin(angle)
-        
-        # 4 coins de la bounding box dans le repère LOCAL du robot
-        half_length = self.robot_length / 2  # 0.45m
-        half_width = self.robot_width / 2    # 0.35m
-        
-        corners_local = [
-            ( half_length,  half_width),  # avant-gauche
-            ( half_length, -half_width),  # avant-droite
-            (-half_length,  half_width),  # arrière-gauche
-            (-half_length, -half_width),  # arrière-droite
-        ]
-        
-        # Vérifier chaque coin
-        for local_x, local_y in corners_local:
-            # Rotation 2D pour obtenir position mondiale du coin
-            world_offset_x = cos_a * local_x - sin_a * local_y
-            world_offset_y = sin_a * local_x + cos_a * local_y
-            
-            corner_x = robot_x + world_offset_x
-            corner_y = robot_y + world_offset_y
-            
-            # Vérifier si ce coin sort du corridor (largeur 3m = ±1.5m)
-            if abs(corner_y) > self.corridor_width / 2:
-                return True
-        
-        return False
     
     def _get_info(self):
         return {

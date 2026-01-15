@@ -166,11 +166,11 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
         print(" | ".join(corner_str) + f" | {vel_str}")
     print()
     
-    # Grille 120×60 - afficher TOUTE LA LARGEUR
+    # Grille 60×30 - CENTRÉE SUR LE ROBOT
     print("GRILLE 60×30 - ENTRÉE DIRECTE DU CNN:")
     print(f"Cellules {env.cell_size}m, vision {env.vision_length}m×{env.vision_width}m")
-    print("Vision Y FIXE: couvre exactement toute la largeur du couloir (3m)")
-    print(f"Robot à ligne {env.robot_row_in_grid} (0.5m derrière), colonne variable selon sa position Y")
+    print("Vision CENTRÉE SUR LE ROBOT: le robot est toujours au centre de la grille")
+    print(f"Robot à ligne {env.robot_row_in_grid} (0.6m derrière), colonne {env.grid_cols//2} (centre)")
     print()
     
     # En-tête colonnes (toute la largeur)
@@ -205,7 +205,9 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
                 symbol = corner_type  # A pour avant, R pour arrière
             else:
                 # Symboles selon valeur normalisée
-                if val == 0.0:
+                if val == -1.0:
+                    symbol = 'X'  # Extérieur du couloir
+                elif val == 0.0:
                     symbol = '▓'  # Sol
                 elif val == 0.5:
                     symbol = '△'  # Bump
@@ -216,17 +218,17 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
             
             line += symbol
         
-        # Distance relative au robot (robot à ligne 5 maintenant)
+        # Distance relative au robot (robot à ligne 6 maintenant)
         relative_dist = (i - env.robot_row_in_grid) * env.cell_size
         print(f"{line} {relative_dist:+.2f}m")
     
     print()
     print("LÉGENDE:")
-    print("  ▓ = sol (0.0)    △ = bump (0.5)    ░ = trou (1.0)")
+    print("  X = extérieur (-1.0)    ▓ = sol (0.0)    △ = bump (0.5)    ░ = trou (1.0)")
     print("  A = coin AVANT de la bounding box    R = coin ARRIÈRE de la bounding box")
     print(f"  Vision: {env.grid_rows}×{env.grid_cols} cellules de {env.cell_size}m")
-    print(f"  Couvre: {env.vision_length}m devant/derrière × {env.vision_width}m largeur FIXE")
-    print(f"  Vision Y FIXE: toujours centrée sur le couloir, pas sur le robot")
+    print(f"  Couvre: {env.vision_length}m devant/derrière × {env.vision_width}m largeur")
+    print(f"  Vision CENTRÉE: le robot est toujours au centre (ligne {env.robot_row_in_grid}, col {env.grid_cols//2})")
     print(f"  Robot représenté par ses 4 coins de bounding box (pas rempli dans la grille)")
     print()
     
@@ -236,16 +238,16 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
     total_cells = grid.size
     for val, count in zip(unique_vals, counts):
         pct = 100 * count / total_cells
-        if val == 0.0:
-            print(f"  Sol (0.0):    {count:5d} cellules ({pct:5.1f}%)")
+        if val == -1.0:
+            print(f"  Extérieur (-1.0): {count:5d} cellules ({pct:5.1f}%)  [X]")
+        elif val == 0.0:
+            print(f"  Sol (0.0):        {count:5d} cellules ({pct:5.1f}%)  [▓]")
         elif val == 0.5:
-            print(f"  Bump (0.5):   {count:5d} cellules ({pct:5.1f}%)")
-        elif val == 0.75:
-            print(f"  Robot (0.75): {count:5d} cellules ({pct:5.1f}%)")
+            print(f"  Bump (0.5):       {count:5d} cellules ({pct:5.1f}%)  [△]")
         elif val == 1.0:
-            print(f"  Trou (1.0):   {count:5d} cellules ({pct:5.1f}%)")
+            print(f"  Trou (1.0):       {count:5d} cellules ({pct:5.1f}%)  [░]")
         else:
-            print(f"  Autre ({val:.2f}): {count:5d} cellules ({pct:5.1f}%)")
+            print(f"  Autre ({val:.2f}):    {count:5d} cellules ({pct:5.1f}%)")
     
     print()
     print("STRUCTURE OBSERVATION POUR CNN:")

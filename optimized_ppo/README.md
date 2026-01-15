@@ -95,42 +95,52 @@ corner_world_y = robot_y + world_offset_y
 - **Dimensions**: 60 lignes × 30 colonnes = 1800 cellules
 - **Résolution**: 0.1m par cellule (équilibre précision/performance)
 - **Couverture spatiale**: 6m longueur × 3m largeur
-- **Valeurs normalisées**: 0.0=sol, 0.5=bump, 1.0=trou
-- **Vision asymétrique**: 0.5m derrière (5 cellules) + 5.5m devant (55 cellules)
-- **Position robot**: Fixe à la ligne 5 (permet de voir plus loin devant)
-- **Vision Y fixe**: Couvre toujours toute la largeur du couloir, pas centrée sur le robot
+- **Valeurs normalisées**: -1.0=extérieur, 0.0=sol, 0.5=bump, 1.0=trou
+- **Vision asymétrique**: 0.6m derrière (6 cellules) + 5.4m devant (54 cellules)
+- **Position robot**: Fixe à la ligne 6 (permet de voir tout le robot + plus loin devant)
+- **Vision CENTRÉE**: Grille toujours centrée sur le robot (col 15), pas sur le couloir
 
 **Vision asymétrique** - **Optimisée pour l'anticipation**:
 
 **Principe**: Le robot n'a pas besoin de voir beaucoup derrière lui (déjà passé) mais doit anticiper les obstacles devant.
 
 **Configuration spatiale**:
-- **Derrière**: 0.5m (5 cellules) - Juste pour contexte de trajectoire
-- **Devant**: 5.5m (55 cellules) - Distance d'anticipation pour freinage/évitement
-- **Largeur**: 3m (30 cellules) - Toute la largeur du couloir
+- **Derrière**: 0.8m (8 cellules) - Assez pour voir les coins arrière même avec robot incliné
+- **Devant**: 5.2m (52 cellules) - Distance d'anticipation pour freinage/évitement
+- **Largeur**: 3m (30 cellules) - Centrée sur le robot (±1.5m)
 - **Total**: 60×30 = 1800 cellules
 
 **Repère de référence**:
-- **Vision Y fixe**: Grille toujours alignée sur le couloir `[-1.5m, +1.5m]`
-- **Pas centrée sur robot**: Évite les translations de grille quand le robot bouge en Y
-- **Robot mobile**: Position du robot varie dans la grille selon sa position Y réelle
+- **Vision CENTRÉE sur robot**: Grille toujours centrée sur la position du robot
+- **Robot fixe dans grille**: Position du robot toujours à (ligne 5, col 15)
+- **Extérieur visible**: Valeur -1.0 pour les zones hors du couloir
+- **Perception latérale**: Le robot peut voir s'il s'approche des bords du couloir
 
 **Calcul de la grille**:
 ```python
 # Position du robot dans la grille monde
 robot_row_world = int(robot_x / 0.1)  # Cellule X du robot
-robot_grid_col = int((robot_y + 1.5) / 0.1)  # Cellule Y du robot
+robot_col_world = int((robot_y + 1.5) / 0.1)  # Cellule Y du robot
 
-# Limites de vision (fenêtre mobile en X, fixe en Y)
-vision_start_row = robot_row_world - 5  # 0.5m derrière
-vision_end_row = robot_row_world + 55   # 5.5m devant
+# Limites de vision (fenêtre mobile en X et Y, centrée sur robot)
+vision_start_row = robot_row_world - 6  # 0.6m derrière
+vision_end_row = robot_row_world + 54   # 5.4m devant
+vision_center_col = 15  # Centre de la grille (30 colonnes)
+vision_start_col = robot_col_world - vision_center_col  # 1.5m à gauche
 
 # Remplissage de la grille 60×30
 for i in range(60):  # Lignes de la grille vision
     world_row = vision_start_row + i
-    for j in range(30):  # Colonnes fixes du couloir
-        world_col = j  # Directement les colonnes du couloir
-        cell_type = self.cell_map.get((world_row, world_col), 2)
+    for j in range(30):  # Colonnes centrées sur robot
+        world_col = vision_start_col + j
+        world_y = (world_col * 0.1) - 1.5  # Position Y réelle
+        
+        # Vérifier si hors couloir
+        if world_y < -1.5 or world_y > 1.5:
+            grid[i, j] = -1.0  # Extérieur du couloir
+        else:
+            cell_type = self.cell_map.get((world_row, world_col), 2)
+            # Mapping: 0=sol (0.0), 1=bump (0.5), 2=trou (1.0)
 ```
 
 **Actions (4 valeurs)** - **Contrôle différentiel précis**:
@@ -164,7 +174,7 @@ self.data.ctrl[:] = action * 20.0
 - **Progression**: +10 × delta_x (récompense continue pour avancer)
 - **Pas de bonus complexes**: Évite le reward hacking
 
-**Terminaisons** - **Détection précise et robuste**:
+**Terminaisons** - **Détection précise et naturelle**:
 
 **1. Fell (tombé dans trou)**:
 ```python
@@ -173,6 +183,7 @@ if z < 0.15:  # Seuil de hauteur critique
 ```
 - **Logique**: Robot tombe quand il n'y a pas de géométrie sous lui
 - **Seuil**: 0.15m sous la hauteur normale (0.45m spawn)
+- **Inclut**: Tomber dans un trou OU sortir du couloir (pas de sol à l'extérieur)
 
 **2. Flipped (robot retourné)**:
 ```python
@@ -184,30 +195,17 @@ if up_z < 0:  # Robot à l'envers
 - **Logique**: Calcul du vecteur "up" depuis le quaternion d'orientation
 - **Robuste**: Détecte retournement quelle que soit l'orientation XY
 
-**3. Out of bounds (sortie de couloir)** - **Innovation précise**:
-```python
-def _is_out_of_bounds(self, robot_x, robot_y):
-    # Calculer les 4 coins de la bounding box
-    corners_world = self._get_robot_bbox_corners(robot_x, robot_y)
-    
-    for i in range(4):  # Vérifier chaque coin
-        corner_y = robot_y + world_offset_y[i]
-        if abs(corner_y) > 1.5:  # Couloir = 3m = ±1.5m
-            return True
-    return False
-```
-- **Précision**: Vérifie chaque coin de la bounding box, pas juste le centre
-- **Réalisme**: Robot pénalisé dès qu'une partie sort, pas quand il est complètement dehors
-
-**4. Success (objectif atteint)**:
+**3. Success (objectif atteint)**:
 ```python
 if x >= 100.0:  # Fin du couloir
     return 100.0, True, {'reason': 'success'}
 ```
 
-**5. Truncated (timeout)**:
+**4. Truncated (timeout)**:
 - **Limite**: 3000 steps par épisode
 - **Calcul**: ~10 minutes à 30 FPS, assez pour parcourir 100m à vitesse normale
+
+**Note importante**: Pas de terminaison artificielle pour sortie du couloir ! Le robot apprend naturellement en tombant dans le vide (pas de géométrie hors du couloir).
 
 ### 2. Génération de Corridors (`corridor_generator.py`)
 
@@ -373,11 +371,11 @@ python3 visualize_corridor_map.py --test-multiple
 
 **Objectif**: Vérifier que l'observation est cohérente et déboguer les problèmes de navigation.
 
-**Exemple de sortie** (robot à x=75m, centré, immobile):
+**Exemple de sortie** (robot à x=75m, y=0.5m, immobile):
 
 ```
 Observation totale: 1902 valeurs (6 + 8 + 88 + 1800 = 1902)
-Robot position: x=75.000m, y=0.000m, z=0.450m
+Robot position: x=75.000m, y=0.500m, z=0.450m
 Robot velocity: vx=0.000, vy=0.000, vz=0.000
 Robot angle: 0.0°
 
@@ -394,57 +392,60 @@ HISTORIQUE ÉTENDU (8 frames × 11 valeurs):
   Actuelle:  AV-G:(+0.0,+0.0) | ... | vel:(+0.00,+0.00,+0.00)
 
 GRILLE 60×30 - ENTRÉE DIRECTE DU CNN:
-Vision: 0.5m derrière + 5.5m devant × 3m largeur
-Robot à ligne 5 (position fixe dans la grille)
+Vision: 0.6m derrière + 5.4m devant × 3m largeur
+Robot à ligne 6, colonne 15 (toujours centré dans la grille)
 
     012345678901234567890123456789
     ──────────────────────────────
-  0|██████████████████████████████  -0.50m
-  1|████████████R██████R██████████  -0.40m  ← Coins arrière
-  2|██████████████████████████████  -0.30m
-  3|██████████████████████████████  -0.20m
-  4|██████████████████████████████  -0.10m
-  5|██████████XXXXXXXXXX██████████  +0.00m  ← Robot (centre)
-  6|██████████XXXXXXXXXX██████████  +0.10m
-  7|██████████XXXXXXXXXX██████████  +0.20m
-  8|██████████XXXXXXXXXX██████████  +0.30m
-  9|██████████XXAXXXXXAX██████████  +0.40m  ← Coins avant
- 10|██████████XXXXXXXXXX██████████  +0.50m
- 11|██████████XXXXXXXXXX██████████  +0.60m
- 12|██████████XXXXXXXXXX██████████  +0.70m
- 13|██████████XXXXXXXXXX██████████  +0.80m
- 14|██████████XXXXXXXXXX██████████  +0.90m
- 15|██████████████████████████████  +1.00m
- 16|██████████████████████████████  +1.10m
- 17|██████████████████████████████  +1.20m
- 18|██████████████████████████████  +1.30m
- 19|██████████████████████████████  +1.40m
- 20|██████████████████████████████  +1.50m
- 21|██████████████████████████████  +1.60m
- 22|██████████████████████████████  +1.70m
- 23|██████████████████████████████  +1.80m
- 24|██████████████████████████████  +1.90m
- 25|██████████████████████████████  +2.00m
- 26|██████████████████████████████  +2.10m
- 27|██████████████████████████████  +2.20m
- 28|██████████████████████████████  +2.30m
- 29|██████████████████████████████  +2.40m
+  0|XXXXXXXXXX████████████XXXXXXXX  -0.60m
+  1|XXXXXXXXXX██R██████R██XXXXXXXX  -0.50m  ← Coins arrière
+  2|XXXXXXXXXX████████████XXXXXXXX  -0.40m
+  3|XXXXXXXXXX████████████XXXXXXXX  -0.30m
+  4|XXXXXXXXXX████████████XXXXXXXX  -0.20m
+  5|XXXXXXXXXX████████████XXXXXXXX  -0.10m
+  6|XXXXXXXXXX██████████████XXXXXX  +0.00m  ← Robot (centre)
+  7|XXXXXXXXXX██████████████XXXXXX  +0.10m
+  8|XXXXXXXXXX██████████████XXXXXX  +0.20m
+  9|XXXXXXXXXX██████████████XXXXXX  +0.30m
+ 10|XXXXXXXXXX██████████████XXXXXX  +0.40m
+ 11|XXXXXXXXXX██A██████A████XXXXXX  +0.50m  ← Coins avant
+ 12|XXXXXXXXXX██████████████XXXXXX  +0.70m
+ 13|XXXXXXXXXX██████████████XXXXXX  +0.80m
+ 14|XXXXXXXXXX██████████████XXXXXX  +0.90m
+ 15|XXXXXXXXXX████████████XXXXXXXX  +1.00m
+ 16|XXXXXXXXXX████████████XXXXXXXX  +1.10m
+ 17|XXXXXXXXXX████████████XXXXXXXX  +1.20m
+ 18|XXXXXXXXXX████████████XXXXXXXX  +1.30m
+ 19|XXXXXXXXXX████████████XXXXXXXX  +1.40m
+ 20|XXXXXXXXXX████████████XXXXXXXX  +1.50m
+ 21|XXXXXXXXXX████████████XXXXXXXX  +1.60m
+ 22|XXXXXXXXXX████████████XXXXXXXX  +1.70m
+ 23|XXXXXXXXXX████████████XXXXXXXX  +1.80m
+ 24|XXXXXXXXXX████████████XXXXXXXX  +1.90m
+ 25|XXXXXXXXXX████████████XXXXXXXX  +2.00m
+ 26|XXXXXXXXXX████████████XXXXXXXX  +2.10m
+ 27|XXXXXXXXXX████████████XXXXXXXX  +2.20m
+ 28|XXXXXXXXXX████████████XXXXXXXX  +2.30m
+ 29|XXXXXXXXXX████████████XXXXXXXX  +2.40m
 
 LÉGENDE:
-  █ = sol (0.0)    ▲ = bump (0.5)    X = trou (1.0)
+  X = extérieur (-1.0)    █ = sol (0.0)    ▲ = bump (0.5)    ░ = trou (1.0)
   A = coin AVANT    R = coin ARRIÈRE
 
 STATISTIQUES:
-  Sol (0.0):    1450 cellules (80.6%)  [█]
-  Bump (0.5):    100 cellules ( 5.6%)  [▲]
-  Trou (1.0):    250 cellules (13.9%)  [X]
+  Extérieur (-1.0): 600 cellules (33.3%)  [X]
+  Sol (0.0):        850 cellules (47.2%)  [█]
+  Bump (0.5):       100 cellules ( 5.6%)  [▲]
+  Trou (1.0):       250 cellules (13.9%)  [░]
 ```
 
 **Analyse de cet exemple**:
-- **Robot centré**: Coins symétriques (col 12 et 18 = ±3 cellules du centre)
+- **Robot décalé à droite**: y=0.5m, donc on voit plus d'extérieur à gauche (X)
+- **Vision centrée**: Robot toujours au centre de la grille (col 15)
+- **Extérieur visible**: Le robot peut percevoir qu'il est proche du bord droit
+- **Coins symétriques**: Coins à ±3 cellules du centre (col 12 et 18)
 - **Trou devant**: Visible lignes 5-10, le robot doit contourner
 - **Historique stable**: Pas de mouvement récent (tous à 0.0)
-- **Vision asymétrique**: Plus de vision devant (lignes 5-29) que derrière (0-5)
 
 **Usage pour débogage**:
 - Vérifier que les obstacles sont bien détectés
