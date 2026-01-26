@@ -17,6 +17,71 @@ from mujoco import viewer
 
 from corridor_env import CorridorEnv
 
+# Import matplotlib pour les graphiques (backend non-interactif)
+import matplotlib
+matplotlib.use('Agg')  # Backend non-interactif
+import matplotlib.pyplot as plt
+
+
+def plot_training_progress(metrics_list, current_iteration):
+    """Sauvegarde les graphiques de progression (pas d'affichage)."""
+    if not metrics_list:
+        return
+    
+    # Extraire les données - utiliser episode_end pour l'axe X
+    episodes = [m['episode_end'] for m in metrics_list]
+    returns = [m['mean_return'] for m in metrics_list]
+    distances = [m['mean_distance'] for m in metrics_list]
+    success_rates = [m['success_rate'] for m in metrics_list]
+    survivals = [m['mean_survival'] for m in metrics_list]
+    
+    # Créer figure avec 4 subplots
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    fig.suptitle(f'Progression entraînement - Itération {current_iteration} ({len(episodes)} points, batch=20 épisodes)', fontsize=14)
+    
+    # 1. Return moyen
+    ax = axes[0, 0]
+    ax.plot(episodes, returns, 'b-o', linewidth=2, markersize=3)
+    ax.set_xlabel('Épisodes')
+    ax.set_ylabel('Return moyen')
+    ax.set_title('Return moyen (par batch de 20)')
+    ax.grid(True, alpha=0.3)
+    
+    # 2. Distance moyenne
+    ax = axes[0, 1]
+    ax.plot(episodes, distances, 'g-o', linewidth=2, markersize=3)
+    ax.set_xlabel('Épisodes')
+    ax.set_ylabel('Distance (m)')
+    ax.set_title('Distance moyenne (par batch de 20)')
+    ax.grid(True, alpha=0.3)
+    
+    # 3. Taux de succès
+    ax = axes[1, 0]
+    ax.plot(episodes, success_rates, 'r-o', linewidth=2, markersize=3)
+    ax.set_xlabel('Épisodes')
+    ax.set_ylabel('Taux de succès (%)')
+    ax.set_title('Taux de succès (par batch de 20)')
+    ax.grid(True, alpha=0.3)
+    
+    # 4. Survie moyenne
+    ax = axes[1, 1]
+    ax.plot(episodes, survivals, 'm-o', linewidth=2, markersize=3)
+    ax.set_xlabel('Épisodes')
+    ax.set_ylabel('Steps de survie')
+    ax.set_title('Durée moyenne (par batch de 20)')
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    # Sauvegarder uniquement
+    os.makedirs("models", exist_ok=True)
+    output_file = f"models/training_progress_iter_{current_iteration}.png"
+    plt.savefig(output_file, dpi=100, bbox_inches='tight')
+    plt.close(fig)  # Fermer pour libérer la mémoire
+    
+    print(f"📊 Graphiques sauvegardés: {output_file}")
+
+
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     nn.init.orthogonal_(layer.weight, std)
@@ -125,7 +190,7 @@ class Agent(nn.Module):
 def make_env():
     """Factory pour environnement."""
     def thunk():
-        env = CorridorEnv(max_steps=3000)
+        env = CorridorEnv(max_steps=1000)  # Réduit à 1000 steps pour avoir plus d'épisodes
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env = gym.wrappers.ClipAction(env)
         return env
@@ -230,8 +295,8 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
                     bbox_positions = [(int(bbox_corners[i*2]), int(bbox_corners[i*2+1])) for i in range(4)]
                     
                     # Afficher grille (20 lignes × TOUTE la largeur 30 colonnes)
-                    print("  GRILLE (lignes 0-19, centrée sur robot):")
-                    for i in range(20):  # Lignes 0-19 (robot à ligne 6)
+                    print("  GRILLE (lignes 0-19, EGO-CENTRIQUE - tourne avec robot):")
+                    for i in range(20):  # Lignes 0-19 (robot à ligne 8)
                         line = "    "
                         for j in range(30):  # TOUTES les colonnes (0-29, robot au centre col 15)
                             # Vérifier si c'est un coin de la bounding box
@@ -251,9 +316,10 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
                                     line += '△'  # Bump
                                 else:  # val == 1.0
                                     line += '░'  # Trou
-                        relative_dist = (i - 6) * 0.1  # Distance relative au robot (6 = 0.6m derrière)
+                        relative_dist = (i - 8) * 0.1  # Distance relative au robot (8 = 0.8m derrière)
                         print(f"    {relative_dist:+.1f}m: {line}")
                     print("    (X=extérieur, ▓=sol, △=bump, ░=trou, A=avant bbox, R=arrière bbox)")
+                    print("    (Grille EGO-CENTRIQUE: tourne avec le robot, 'devant' = toujours vers le haut)")
                 
                 v.sync()
                 time.sleep(0.05)  # 20 FPS
@@ -314,7 +380,7 @@ def train(
     envs = gym.vector.AsyncVectorEnv([make_env() for _ in range(num_envs)])
     
     # Environnement de debug pour visualisation
-    debug_env = CorridorEnv(max_steps=3000)
+    debug_env = CorridorEnv(max_steps=1000)  # Même durée que les envs d'entraînement
     
     obs_dim = envs.single_observation_space.shape[0]
     act_dim = envs.single_action_space.shape[0]
@@ -376,10 +442,16 @@ def train(
     # Stats
     episode_returns = []
     episode_distances = []
+    episode_steps = []  # Nouveau : durée des épisodes
     best_return = -float('inf')
     best_distance = 0.0
     successes = 0
     total_episodes = 0
+    
+    # Métriques par batch de 20 épisodes (pour avoir plus de points)
+    batch_metrics = []
+    batch_size = 20  # Réduit à 20 pour avoir plus de points sur le graphique
+    last_batch_episode = 0  # Dernier épisode traité pour les batches
     
     # Compteur raisons de terminaison
     termination_reasons = {
@@ -453,6 +525,7 @@ def train(
                     
                     episode_returns.append(float(ret))
                     episode_distances.append(float(dist))
+                    episode_steps.append(infos.get('step', [0] * num_envs)[i] if isinstance(infos, dict) else 0)
                     total_episodes += 1
                     
                     if ret > best_return:
@@ -539,6 +612,34 @@ def train(
         
         # === LOGGING PROPRE PAR ITÉRATION ===
         if iteration % 2 == 0 or iteration == 1:
+            # Vérifier si on a complété un nouveau batch de 100 épisodes
+            while total_episodes >= last_batch_episode + batch_size:
+                batch_start = last_batch_episode
+                batch_end = last_batch_episode + batch_size
+                
+                # Calculer moyennes pour ce batch de 100 épisodes
+                batch_returns = episode_returns[batch_start:batch_end]
+                batch_distances = episode_distances[batch_start:batch_end]
+                batch_steps_list = episode_steps[batch_start:batch_end]
+                
+                # Compter succès dans ce batch
+                batch_successes = sum(1 for i in range(batch_start, batch_end) 
+                                     if episode_distances[i] >= 100.0)
+                
+                batch_metrics.append({
+                    'batch_num': len(batch_metrics) + 1,
+                    'episode_end': batch_end,  # Numéro du dernier épisode de ce batch
+                    'episodes_range': f"{batch_start+1}-{batch_end}",
+                    'global_step': global_step,
+                    'mean_return': np.mean(batch_returns),
+                    'mean_distance': np.mean(batch_distances),
+                    'mean_survival': np.mean(batch_steps_list),
+                    'success_rate': 100 * batch_successes / batch_size,
+                })
+                
+                last_batch_episode = batch_end
+                print(f"✅ Batch {len(batch_metrics)} complété (épisodes {batch_start+1}-{batch_end})")
+            
             print(f"\n{'='*70}")
             print(f"ITERATION {iteration}/{num_iterations} | Steps: {global_step:,} | SPS: {sps:,} | Time: {elapsed:.0f}s")
             print(f"Max Steps Curriculum: {current_max_steps}")
@@ -547,11 +648,14 @@ def train(
             if episode_returns:
                 recent_ret = episode_returns[-100:] if len(episode_returns) >= 100 else episode_returns
                 recent_dist = episode_distances[-100:] if len(episode_distances) >= 100 else episode_distances
+                recent_steps = episode_steps[-100:] if len(episode_steps) >= 100 else episode_steps
                 
                 success_rate = 100 * successes / max(1, total_episodes)
                 print(f"📊 ÉPISODES: {total_episodes} total | Succès: {successes} ({success_rate:.1f}%)")
+                print(f"📊 BATCHES: {len(batch_metrics)} batches de 100 épisodes complétés")
                 print(f"📈 RETURN  : Récent {np.mean(recent_ret):>7.1f} ± {np.std(recent_ret):>5.1f} | Meilleur {best_return:>7.1f}")
                 print(f"🎯 DISTANCE: Récent {np.mean(recent_dist):>7.1f}m ± {np.std(recent_dist):>5.1f}m | Meilleur {best_distance:>7.1f}m")
+                print(f"⏱️  SURVIE  : Récent {np.mean(recent_steps):>7.0f} steps ± {np.std(recent_steps):>5.0f}")
                 
                 # Récapitulatif terminaisons (seulement si > 0)
                 active_reasons = {k: v for k, v in termination_reasons.items() if v > 0}
@@ -568,6 +672,27 @@ def train(
             model_path = f"models/ppo_corridor_{global_step}.pth"
             torch.save(agent.state_dict(), model_path)
             print(f"💾 Modèle sauvegardé: {model_path}")
+            
+            # Sauvegarder métriques des batches en CSV
+            if batch_metrics:
+                import csv
+                metrics_file = "models/training_metrics.csv"
+                
+                with open(metrics_file, 'w', newline='') as f:  # 'w' pour réécrire tout
+                    writer = csv.DictWriter(f, fieldnames=['batch_num', 'episode_end', 'episodes_range', 
+                                                           'global_step', 'mean_return', 'mean_distance', 
+                                                           'mean_survival', 'success_rate'])
+                    writer.writeheader()
+                    
+                    # Écrire tous les batches
+                    for metrics in batch_metrics:
+                        writer.writerow(metrics)
+                
+                print(f"📊 Métriques sauvegardées: {metrics_file}")
+        
+        # Afficher graphiques toutes les 5 itérations
+        if iteration % 5 == 0 and iteration > 0 and batch_metrics:
+            plot_training_progress(batch_metrics, iteration)
         
         # Debug render toutes les 5 itérations
         if iteration % 5 == 0:
@@ -582,13 +707,37 @@ def train(
     print(f"Durée: {elapsed/60:.1f} minutes ({elapsed:.0f}s)")
     print(f"SPS moyen: {total_timesteps/elapsed:.0f}")
     print(f"Episodes: {total_episodes}")
+    print(f"Batches de 100 épisodes: {len(batch_metrics)}")
     print(f"Succès: {successes} ({100*successes/max(1,total_episodes):.1f}%)")
     print(f"Meilleur return: {best_return:.1f}")
     print(f"Meilleure distance: {best_distance:.1f}m")
     
-    if episode_returns:
-        print(f"Return moyen (last 100): {np.mean(episode_returns[-100:]):.1f}")
-        print(f"Distance moyenne (last 100): {np.mean(episode_distances[-100:]):.1f}m")
+    if batch_metrics:
+        last_batch = batch_metrics[-1]
+        print(f"\nDernier batch complété:")
+        print(f"  Return moyen: {last_batch['mean_return']:.1f}")
+        print(f"  Distance moyenne: {last_batch['mean_distance']:.1f}m")
+        print(f"  Survie moyenne: {last_batch['mean_survival']:.0f} steps")
+        print(f"  Taux de succès: {last_batch['success_rate']:.1f}%")
+    
+    # Sauvegarder métriques finales
+    if batch_metrics:
+        import csv
+        metrics_file = "models/training_metrics.csv"
+        
+        with open(metrics_file, 'w', newline='') as f:
+            writer = csv.DictWriter(f, fieldnames=['batch_num', 'episode_end', 'episodes_range', 
+                                                   'global_step', 'mean_return', 'mean_distance', 
+                                                   'mean_survival', 'success_rate'])
+            writer.writeheader()
+            
+            for metrics in batch_metrics:
+                writer.writerow(metrics)
+        
+        print(f"\n📊 Toutes les métriques sauvegardées: {metrics_file}")
+        
+        # Générer graphique final
+        plot_training_progress(batch_metrics, num_iterations)
     
     # Sauvegarde finale
     final_path = "models/ppo_corridor_final.pth"

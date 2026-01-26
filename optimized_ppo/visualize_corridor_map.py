@@ -166,11 +166,13 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
         print(" | ".join(corner_str) + f" | {vel_str}")
     print()
     
-    # Grille 60×30 - CENTRÉE SUR LE ROBOT
+    # Grille 60×30 - CENTRÉE ET ORIENTÉE selon le robot
     print("GRILLE 60×30 - ENTRÉE DIRECTE DU CNN:")
     print(f"Cellules {env.cell_size}m, vision {env.vision_length}m×{env.vision_width}m")
-    print("Vision CENTRÉE SUR LE ROBOT: le robot est toujours au centre de la grille")
-    print(f"Robot à ligne {env.robot_row_in_grid} (0.6m derrière), colonne {env.grid_cols//2} (centre)")
+    print("Vision EGO-CENTRIQUE: grille centrée ET orientée selon le robot")
+    print(f"Robot à ligne {env.robot_row_in_grid} (0.8m derrière), colonne {env.grid_cols//2} (centre)")
+    print(f"La grille TOURNE avec le robot (angle={np.degrees(robot_angle):.1f}°)")
+    print("Le robot voit toujours 'devant' vers le haut de la grille")
     print()
     
     # En-tête colonnes (toute la largeur)
@@ -228,8 +230,9 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
     print("  A = coin AVANT de la bounding box    R = coin ARRIÈRE de la bounding box")
     print(f"  Vision: {env.grid_rows}×{env.grid_cols} cellules de {env.cell_size}m")
     print(f"  Couvre: {env.vision_length}m devant/derrière × {env.vision_width}m largeur")
-    print(f"  Vision CENTRÉE: le robot est toujours au centre (ligne {env.robot_row_in_grid}, col {env.grid_cols//2})")
-    print(f"  Robot représenté par ses 4 coins de bounding box (pas rempli dans la grille)")
+    print(f"  Vision EGO-CENTRIQUE: grille tourne avec le robot (angle={np.degrees(robot_angle):.1f}°)")
+    print(f"  Robot toujours au centre (ligne {env.robot_row_in_grid}, col {env.grid_cols//2})")
+    print(f"  'Devant' = toujours vers le haut de la grille, quelle que soit l'orientation réelle")
     print()
     
     # Statistiques de la grille

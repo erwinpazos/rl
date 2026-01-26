@@ -190,55 +190,50 @@ class CorridorEnv(gym.Env):
         ]).astype(np.float32)       # Total: 6 + 8 + 88 + 1800 = 1902 valeurs
     
     def _get_robot_bbox_corners(self, robot_x, robot_y):
-        """Position des 4 coins de la bounding box dans le repère relatif de la grille CENTRÉE SUR LE ROBOT.
+        """Position des 4 coins de la bounding box dans le repère de la grille EGO-CENTRIQUE.
         
-        La bounding box est un rectangle FIXE de 1.1m × 0.7m qui pivote
-        avec l'angle du robot. Les dimensions restent constantes quelle que soit l'orientation.
+        Les coins sont toujours dans le repère LOCAL du robot (pas de rotation nécessaire
+        car la grille tourne avec le robot).
         """
-        # Récupérer orientation robot (quaternion → angle autour de Z)
-        quat = self.data.qpos[3:7]
-        # Formule correcte pour extraire l'angle yaw d'un quaternion
-        angle = 2 * np.arctan2(quat[3], quat[0])
-        
-        cos_a = np.cos(angle)
-        sin_a = np.sin(angle)
+        # Dans le repère ego-centrique, le robot est toujours orienté "vers le haut"
+        # donc les coins sont fixes dans la grille
         
         # 4 coins de la bounding box dans le repère LOCAL du robot
         # X = avant/arrière (longueur), Y = gauche/droite (largeur)
         half_length = self.robot_length / 2  # 0.55m = 5.5 cellules
         half_width = self.robot_width / 2    # 0.35m = 3.5 cellules
         
-        # Coins dans le repère local (X avant, Y gauche)
-        corners_local = [
-            ( half_length,  half_width),  # avant-gauche
-            ( half_length, -half_width),  # avant-droite
-            (-half_length,  half_width),  # arrière-gauche
-            (-half_length, -half_width),  # arrière-droite
-        ]
-        
-        corners_grid = []
-        
-        # Position du robot dans la grille CENTRÉE
-        robot_grid_row = self.robot_row_in_grid  # 5 (0.5m derrière, fixe en X)
+        # Position du robot dans la grille (toujours au centre)
+        robot_grid_row = self.robot_row_in_grid  # 8 (0.8m derrière, fixe en X)
         robot_grid_col = self.grid_cols // 2      # 15 (centre de la grille, fixe en Y)
         
-        for local_x, local_y in corners_local:
-            # Rotation 2D autour du centre du robot
-            # world_offset_x = déplacement en X (direction du couloir = rows)
-            # world_offset_y = déplacement en Y (perpendiculaire = cols)
-            world_offset_x = cos_a * local_x - sin_a * local_y
-            world_offset_y = sin_a * local_x + cos_a * local_y
-            
-            # Convertir en cellules de grille
-            # row augmente vers l'avant (X positif)
-            # col augmente vers la droite (Y positif)
-            delta_row = round(world_offset_x / self.cell_size)
-            delta_col = round(world_offset_y / self.cell_size)
-            
-            grid_row = robot_grid_row + delta_row
-            grid_col = robot_grid_col + delta_col
-            
-            corners_grid.extend([grid_row, grid_col])
+        # Coins dans le repère LOCAL (pas de rotation car grille ego-centrique)
+        # X local = lignes de la grille, Y local = colonnes de la grille
+        corners_grid = []
+        
+        # Avant-gauche
+        corners_grid.extend([
+            robot_grid_row + round(half_length / self.cell_size),  # row
+            robot_grid_col + round(half_width / self.cell_size)    # col
+        ])
+        
+        # Avant-droite
+        corners_grid.extend([
+            robot_grid_row + round(half_length / self.cell_size),  # row
+            robot_grid_col - round(half_width / self.cell_size)    # col
+        ])
+        
+        # Arrière-gauche
+        corners_grid.extend([
+            robot_grid_row - round(half_length / self.cell_size),  # row
+            robot_grid_col + round(half_width / self.cell_size)    # col
+        ])
+        
+        # Arrière-droite
+        corners_grid.extend([
+            robot_grid_row - round(half_length / self.cell_size),  # row
+            robot_grid_col - round(half_width / self.cell_size)    # col
+        ])
         
         return np.array(corners_grid, dtype=np.float32)
     
@@ -289,33 +284,41 @@ class CorridorEnv(gym.Env):
         return np.array(history_obs, dtype=np.float32)
     
     def _get_grid_obs(self, robot_x, robot_y):
-        """Grille unique 60×30 avec environnement, CENTRÉE SUR LE ROBOT."""
+        """Grille unique 60×30 avec environnement, CENTRÉE ET ORIENTÉE selon le robot."""
         grid = np.zeros((self.grid_rows, self.grid_cols), dtype=np.float32)
+        
+        # Récupérer l'angle du robot
+        quat = self.data.qpos[3:7]
+        robot_angle = 2 * np.arctan2(quat[3], quat[0])
+        cos_a = np.cos(robot_angle)  # Rotation directe (pas inverse)
+        sin_a = np.sin(robot_angle)
         
         # Position du robot dans la grille monde
         robot_row_world = int(robot_x / self.cell_size)
         robot_col_world = int((robot_y + self.corridor_width/2) / self.cell_size)
         
-        # Limites de la vision (0.5m derrière, 5.5m devant)
-        vision_start_row = robot_row_world - self.robot_row_in_grid  # 0.5m derrière
-        
-        # Vision Y CENTRÉE SUR LE ROBOT : 15 cellules de chaque côté (1.5m)
-        vision_center_col = self.grid_cols // 2  # 15 (centre de la grille 30 colonnes)
-        vision_start_col = robot_col_world - vision_center_col
-        
-        # Remplir la grille avec l'environnement
+        # Pour chaque cellule de la grille de vision
         for i in range(self.grid_rows):
             for j in range(self.grid_cols):
-                # Position dans le monde
-                world_row = vision_start_row + i
-                world_col = vision_start_col + j
+                # Position relative dans le repère de la grille (robot au centre)
+                # i=0 → 0.8m derrière, i=8 → robot, i=60 → 5.2m devant
+                relative_x = (i - self.robot_row_in_grid) * self.cell_size  # Distance devant/derrière
+                relative_y = (j - self.grid_cols // 2) * self.cell_size     # Distance gauche/droite
                 
-                # Calculer position Y réelle dans le monde
-                world_y = (world_col * self.cell_size) - self.corridor_width/2
+                # Rotation pour obtenir position dans le repère monde
+                world_offset_x = cos_a * relative_x - sin_a * relative_y
+                world_offset_y = sin_a * relative_x + cos_a * relative_y
+                
+                # Position absolue dans le monde
+                world_x = robot_x + world_offset_x
+                world_y = robot_y + world_offset_y
+                
+                # Convertir en indices de grille monde
+                world_row = int(world_x / self.cell_size)
+                world_col = int((world_y + self.corridor_width/2) / self.cell_size)
                 
                 # Vérifier si en dehors du couloir
-                if world_col < 0 or world_col >= int(self.corridor_width / self.cell_size) or \
-                   world_y < -self.corridor_width/2 or world_y > self.corridor_width/2:
+                if world_y < -self.corridor_width/2 or world_y > self.corridor_width/2:
                     # En dehors du couloir = valeur distincte -1.0
                     grid[i, j] = -1.0
                 else:
@@ -329,8 +332,6 @@ class CorridorEnv(gym.Env):
                         grid[i, j] = 0.5  # Bump
                     else:  # cell_type == 2
                         grid[i, j] = 1.0  # Trou
-        
-        # PAS de robot dans la grille - les 4 coins sont donnés séparément dans l'observation
         
         return grid
     

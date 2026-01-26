@@ -111,36 +111,39 @@ corner_world_y = robot_y + world_offset_y
 - **Total**: 60×30 = 1800 cellules
 
 **Repère de référence**:
-- **Vision CENTRÉE sur robot**: Grille toujours centrée sur la position du robot
-- **Robot fixe dans grille**: Position du robot toujours à (ligne 5, col 15)
+- **Vision EGO-CENTRIQUE**: Grille toujours centrée ET orientée selon le robot
+- **Robot fixe dans grille**: Position du robot toujours à (ligne 8, col 15)
+- **Rotation automatique**: La grille tourne avec le robot (comme une caméra embarquée)
 - **Extérieur visible**: Valeur -1.0 pour les zones hors du couloir
-- **Perception latérale**: Le robot peut voir s'il s'approche des bords du couloir
+- **Invariance**: Le robot voit toujours "devant" dans la même direction (haut de la grille)
 
-**Calcul de la grille**:
+**Calcul de la grille avec rotation**:
 ```python
-# Position du robot dans la grille monde
-robot_row_world = int(robot_x / 0.1)  # Cellule X du robot
-robot_col_world = int((robot_y + 1.5) / 0.1)  # Cellule Y du robot
+# Angle du robot
+robot_angle = 2 * np.arctan2(quat[3], quat[0])
+cos_a = np.cos(-robot_angle)  # Rotation inverse
+sin_a = np.sin(-robot_angle)
 
-# Limites de vision (fenêtre mobile en X et Y, centrée sur robot)
-vision_start_row = robot_row_world - 6  # 0.6m derrière
-vision_end_row = robot_row_world + 54   # 5.4m devant
-vision_center_col = 15  # Centre de la grille (30 colonnes)
-vision_start_col = robot_col_world - vision_center_col  # 1.5m à gauche
-
-# Remplissage de la grille 60×30
-for i in range(60):  # Lignes de la grille vision
-    world_row = vision_start_row + i
-    for j in range(30):  # Colonnes centrées sur robot
-        world_col = vision_start_col + j
-        world_y = (world_col * 0.1) - 1.5  # Position Y réelle
+# Pour chaque cellule de la grille de vision
+for i in range(60):  # Lignes
+    for j in range(30):  # Colonnes
+        # Position relative dans repère robot
+        relative_x = (i - 8) * 0.1  # Devant/derrière
+        relative_y = (j - 15) * 0.1  # Gauche/droite
+        
+        # Rotation pour obtenir position monde
+        world_offset_x = cos_a * relative_x - sin_a * relative_y
+        world_offset_y = sin_a * relative_x + cos_a * relative_y
+        
+        world_x = robot_x + world_offset_x
+        world_y = robot_y + world_offset_y
         
         # Vérifier si hors couloir
         if world_y < -1.5 or world_y > 1.5:
-            grid[i, j] = -1.0  # Extérieur du couloir
+            grid[i, j] = -1.0  # Extérieur
         else:
-            cell_type = self.cell_map.get((world_row, world_col), 2)
-            # Mapping: 0=sol (0.0), 1=bump (0.5), 2=trou (1.0)
+            # Récupérer type de cellule
+            cell_type = cell_map.get((world_row, world_col), 2)
 ```
 
 **Actions (4 valeurs)** - **Contrôle différentiel précis**:

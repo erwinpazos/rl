@@ -118,16 +118,18 @@ def display_vision(obs, step, ret):
     print(f"Position: x={robot[0]:.2f}m, y={robot[1]:.2f}m, z={robot[2]:.2f}m")
     print(f"Velocity: vx={robot[3]:.2f}, vy={robot[4]:.2f}, vz={robot[5]:.2f}")
     print("=" * 50)
-    print("\nVision 60×30 (robot à ligne 10):")
+    print("\nVision 60×30 EGO-CENTRIQUE (robot à ligne 8):")
     print("-" * 40)
     
     # Afficher grille (20 premières lignes)
     for i in range(20):
-        relative_dist = (i - 10) * 0.1  # Robot à ligne 10
+        relative_dist = (i - 8) * 0.1  # Robot à ligne 8
         line = f"{relative_dist:+.1f}m: "
         for j in range(30):
             val = grid[i, j]
-            if val == 0.0:
+            if val == -1.0:
+                line += 'X'  # Extérieur
+            elif val == 0.0:
                 line += '▓'
             elif val == 0.5:
                 line += '△'
@@ -136,7 +138,8 @@ def display_vision(obs, step, ret):
         print(line)
     
     print("-" * 40)
-    print("Légende: ▓=sol  △=bump  ░=trou")
+    print("Légende: X=extérieur  ▓=sol  △=bump  ░=trou")
+    print("Grille tourne avec le robot (ego-centrique)")
     print("=" * 50)
 
 
