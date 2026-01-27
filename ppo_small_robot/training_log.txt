@@ -1,0 +1,12 @@
+Step 3,013 | Ep 10 | Return -103.1 | Length 301 | FPS 569
+Step 7,649 | Ep 20 | Return -116.4 | Length 464 | FPS 552
+Step 8,936 | Ep 30 | Return -91.9 | Length 129 | FPS 533
+Step 14,411 | Ep 40 | Return -134.3 | Length 548 | FPS 522
+Step 17,709 | Ep 50 | Return -88.6 | Length 330 | FPS 536
+Step 19,587 | Ep 60 | Return -82.2 | Length 188 | FPS 537
+Step 22,783 | Ep 70 | Return -125.6 | Length 320 | FPS 526
+Step 25,611 | Ep 80 | Return -92.9 | Length 283 | FPS 531
+Step 27,679 | Ep 90 | Return -89.1 | Length 207 | FPS 530
+Step 29,438 | Ep 100 | Return -81.8 | Length 176 | FPS 527
+Step 36,455 | Ep 110 | Return -107.9 | Length 702 | FPS 528
+Step 41,348 | Ep 120 | Return -113.0 | Length 489 | FPS 522
