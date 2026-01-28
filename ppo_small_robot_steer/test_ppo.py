@@ -26,11 +26,11 @@ class Agent(nn.Module):
     def __init__(self, obs_dim, act_dim):
         super().__init__()
         
-        # Observation: pos(3) + vel(3) + bbox(8) + history(88) + grid(1800) = 1902
+        # Observation: pos(3) + vel(3) + bbox(8) + history(88) + grid(5400) = 5502
         self.robot_state_dim = 6   # pos(3) + vel(3)
         self.bbox_dim = 8          # 4 coins × 2 coords
         self.history_dim = 88      # 8 frames × 11 valeurs (8 coins + 3 vitesses) = 88
-        self.grid_dim = 1800       # 60×30 = 1800
+        self.grid_dim = 5400       # 60×30×3 = 5400
         
         # MLP pour état robot (position + vitesse + bbox)
         self.robot_net = nn.Sequential(
@@ -50,9 +50,9 @@ class Agent(nn.Module):
             nn.Tanh(),
         )
         
-        # CNN UNIQUE pour grille 60×30
+        # CNN UNIQUE pour grille 60×30×3
         self.cnn = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),   # 60×30 -> 30×15
+            nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1),   # 60×30 -> 30×15
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # 30×15 -> 15×8
             nn.ReLU(),
@@ -83,7 +83,7 @@ class Agent(nn.Module):
         
         history_start = self.robot_state_dim + self.bbox_dim  # 14
         history = obs[:, history_start:history_start+self.history_dim]  # 14:102
-        grid = obs[:, history_start+self.history_dim:].view(-1, 1, 60, 30)  # 102:1902
+        grid = obs[:, history_start+self.history_dim:].view(-1, 3, 60, 30)  # 102:5502 → (batch, 3, 60, 30)
         
         # Traiter séparément
         robot_feat = self.robot_net(robot_and_bbox)
@@ -108,38 +108,43 @@ def display_vision(obs, step, ret):
     """Afficher vision robot dans terminal."""
     print("\033[2J\033[H", end="")
     
-    # Décoder observation: pos(3) + vel(3) + bbox(8) + history(88) + grid(1800)
+    # Décoder observation: pos(3) + vel(3) + bbox(8) + history(88) + grid(5400)
     robot = obs[:6]
     bbox = obs[6:14]
-    grid = obs[102:].reshape(60, 30)
+    grid = obs[102:].reshape(60, 30, 3)  # 3 canaux
     
     print("=" * 50)
     print(f"Step: {step} | Return: {ret:.1f}")
     print(f"Position: x={robot[0]:.2f}m, y={robot[1]:.2f}m, z={robot[2]:.2f}m")
     print(f"Velocity: vx={robot[3]:.2f}, vy={robot[4]:.2f}, vz={robot[5]:.2f}")
     print("=" * 50)
-    print("\nVision 60×30 EGO-CENTRIQUE (robot à ligne 8):")
+    print("\nVision 60×30×3 EGO-CENTRIQUE (robot à ligne 8):")
+    print("Canal 0=Sol, Canal 1=Obstacles, Canal 2=Trous")
     print("-" * 40)
     
-    # Afficher grille (20 premières lignes)
+    # Afficher grille combinée (20 premières lignes)
     for i in range(20):
         relative_dist = (i - 8) * 0.1  # Robot à ligne 8
         line = f"{relative_dist:+.1f}m: "
         for j in range(30):
-            val = grid[i, j]
-            if val == -1.0:
-                line += 'X'  # Extérieur
-            elif val == 0.0:
-                line += '▓'
-            elif val == 0.5:
-                line += '△'
+            # Combiner les 3 canaux pour affichage
+            sol = grid[i, j, 0]
+            obstacle = grid[i, j, 1]
+            trou = grid[i, j, 2]
+            
+            if obstacle > 0.5:
+                line += 'X'  # Obstacle (bump ou extérieur)
+            elif trou > 0.5:
+                line += '░'  # Trou
+            elif sol > 0.5:
+                line += '▓'  # Sol
             else:
-                line += '░'
+                line += '?'  # Erreur
         print(line)
     
     print("-" * 40)
-    print("Légende: X=extérieur  ▓=sol  △=bump  ░=trou")
-    print("Grille tourne avec le robot (ego-centrique)")
+    print("Légende: X=obstacle  ▓=sol  ░=trou")
+    print("3 canaux binaires: [sol, obstacles, trous]")
     print("=" * 50)
 
 

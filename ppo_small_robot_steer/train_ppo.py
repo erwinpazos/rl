@@ -3,9 +3,11 @@ Entraînement PPO OPTIMISÉ pour robot dans corridor.
 - Environnements parallèles (AsyncVectorEnv)
 - Gros batches pour GPU
 - Logging efficace
+- Configuration via fichier JSON
 """
 import os
 import time
+import json
 import numpy as np
 import torch
 import torch.nn as nn
@@ -21,6 +23,22 @@ from corridor_env import CorridorEnv
 import matplotlib
 matplotlib.use('Agg')  # Backend non-interactif
 import matplotlib.pyplot as plt
+
+
+def load_config(config_path="config.json"):
+    """Charge la configuration depuis un fichier JSON."""
+    if not os.path.exists(config_path):
+        print(f"⚠️  Fichier de config {config_path} non trouvé, utilisation des valeurs par défaut")
+        return None
+    
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        print(f"✅ Configuration chargée depuis {config_path}")
+        return config
+    except Exception as e:
+        print(f"❌ Erreur lors du chargement de {config_path}: {e}")
+        return None
 
 
 def plot_training_progress(metrics_list, current_iteration):
@@ -92,76 +110,100 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 class Agent(nn.Module):
     """CNN UNIQUE + MLP simplifié."""
     
-    def __init__(self, obs_dim, act_dim):
+    def __init__(self, obs_dim, act_dim, config=None):
         super().__init__()
         
-        # Observation: pos(3) + vel(3) + angle(1) + bbox(8) + history(88) + grid(1800) = 1903
-        self.robot_state_dim = 7   # pos(3) + vel(3) + angle(1)
-        self.bbox_dim = 8          # 4 coins × 2 coords
-        self.history_dim = 88      # 8 frames × 11 valeurs (8 coins + 3 vitesses) = 88
-        self.grid_dim = 1800       # 60×30 = 1800
+        # Configuration par défaut ou depuis config
+        if config and 'network' in config:
+            net_config = config['network']
+            self.robot_state_dim = net_config.get('robot_state_dim', 7)
+            self.history_dim = net_config.get('history_dim', 48)  # 8 × 6 = 48
+            self.grid_dim = net_config.get('grid_dim', 3600)  # 60×30×2 = 3600
+            robot_hidden = net_config.get('robot_net_hidden', [64, 64])
+            history_hidden = net_config.get('history_net_hidden', [128, 64, 32])
+            cnn_channels = net_config.get('cnn_channels', [32, 64, 128])
+            backbone_hidden = net_config.get('backbone_hidden', [128, 64])
+        else:
+            # Valeurs par défaut
+            self.robot_state_dim = 7
+            self.history_dim = 48  # 8 × 6 = 48
+            self.grid_dim = 3600  # 60×30×2 = 3600
+            robot_hidden = [64, 64]
+            history_hidden = [128, 64, 32]
+            cnn_channels = [32, 64, 128]
+            backbone_hidden = [128, 64]
         
         # MLP pour état robot (position + vitesse + angle)
-        self.robot_net = nn.Sequential(
-            layer_init(nn.Linear(self.robot_state_dim + self.bbox_dim, 64)),  # 7 + 8 = 15
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-        )
+        robot_layers = []
+        prev_dim = self.robot_state_dim  # 7 valeurs (pas de bbox)
+        for hidden_dim in robot_hidden:
+            robot_layers.extend([
+                layer_init(nn.Linear(prev_dim, hidden_dim)),
+                nn.Tanh()
+            ])
+            prev_dim = hidden_dim
+        self.robot_net = nn.Sequential(*robot_layers)
         
         # MLP pour historique des positions + vitesses (anticipation)
-        self.history_net = nn.Sequential(
-            layer_init(nn.Linear(self.history_dim, 128)),  # Plus de neurones pour plus de données (88 → 128)
-            nn.Tanh(),
-            layer_init(nn.Linear(128, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 32)),
-            nn.Tanh(),
-        )
+        history_layers = []
+        prev_dim = self.history_dim
+        for hidden_dim in history_hidden:
+            history_layers.extend([
+                layer_init(nn.Linear(prev_dim, hidden_dim)),
+                nn.Tanh()
+            ])
+            prev_dim = hidden_dim
+        self.history_net = nn.Sequential(*history_layers)
         
-        # CNN UNIQUE pour grille 60×30 (plus petite = plus facile)
-        self.cnn = nn.Sequential(
-            # 60×30 -> 30×15
-            nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            # 30×15 -> 15×8
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            # 15×8 -> 8×4
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1),
-            nn.ReLU(),
-            nn.Flatten(),  # 128 × 8 × 4 = 4096
-            layer_init(nn.Linear(4096, 128)),
-            nn.Tanh(),
-        )
+        # CNN pour grille 60×30×2 (2 canaux)
+        cnn_layers = []
+        in_channels = 2  # 2 canaux : obstacles, trous
+        for out_channels in cnn_channels:
+            cnn_layers.extend([
+                nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=2, padding=1),
+                nn.ReLU()
+            ])
+            in_channels = out_channels
+        
+        # Calculer la taille après convolutions (60×30 → 8×4 après 3 conv stride=2)
+        final_size = cnn_channels[-1] * 8 * 4  # 128 * 8 * 4 = 4096
+        cnn_layers.extend([
+            nn.Flatten(),
+            layer_init(nn.Linear(final_size, backbone_hidden[0])),
+            nn.Tanh()
+        ])
+        self.cnn = nn.Sequential(*cnn_layers)
         
         # Backbone combiné
-        self.backbone = nn.Sequential(
-            layer_init(nn.Linear(64 + 32 + 128, 128)),  # robot_state + history + cnn
-            nn.Tanh(),
-            layer_init(nn.Linear(128, 64)),
-            nn.Tanh(),
-        )
+        backbone_input_dim = robot_hidden[-1] + history_hidden[-1] + backbone_hidden[0]
+        backbone_layers = []
+        prev_dim = backbone_input_dim
+        for hidden_dim in backbone_hidden:
+            backbone_layers.extend([
+                layer_init(nn.Linear(prev_dim, hidden_dim)),
+                nn.Tanh()
+            ])
+            prev_dim = hidden_dim
+        self.backbone = nn.Sequential(*backbone_layers)
         
         # Actor/Critic
-        self.actor_mean = layer_init(nn.Linear(64, act_dim), std=0.01)
+        final_dim = backbone_hidden[-1]
+        self.actor_mean = layer_init(nn.Linear(final_dim, act_dim), std=0.01)
         self.actor_logstd = nn.Parameter(torch.zeros(1, act_dim))
-        self.critic = layer_init(nn.Linear(64, 1), std=1.0)
+        self.critic = layer_init(nn.Linear(final_dim, 1), std=1.0)
     
     def forward(self, obs):
-        # Décoder observation: pos(3) + vel(3) + angle(1) + bbox(8) + history(88) + grid(1800)
+        # Décoder observation: pos(3) + vel(3) + angle(1) + history(48) + grid(3600)
         robot_state = obs[:, :self.robot_state_dim]  # 0:7 (pos + vel + angle)
-        bbox = obs[:, self.robot_state_dim:self.robot_state_dim+self.bbox_dim]  # 7:15
-        robot_and_bbox = torch.cat([robot_state, bbox], dim=1)  # 15 valeurs
         
-        history_start = self.robot_state_dim + self.bbox_dim  # 15
-        history = obs[:, history_start:history_start+self.history_dim]  # 15:103
-        grid = obs[:, history_start+self.history_dim:].view(-1, 1, 60, 30)  # 103:1903
+        history_start = self.robot_state_dim  # 7
+        history = obs[:, history_start:history_start+self.history_dim]  # 7:55
+        grid = obs[:, history_start+self.history_dim:].view(-1, 2, 60, 30)  # 55:3655 → (batch, 2, 60, 30)
         
         # Traiter séparément
-        robot_feat = self.robot_net(robot_and_bbox)  # 15 → 64
-        history_feat = self.history_net(history)      # 88 → 32
-        grid_feat = self.cnn(grid)                    # 1800 → 128
+        robot_feat = self.robot_net(robot_state)      # 7 → 64
+        history_feat = self.history_net(history)      # 48 → 32
+        grid_feat = self.cnn(grid)                    # 3600 → 128
         
         # Combiner les trois sources
         combined = torch.cat([robot_feat, history_feat, grid_feat], dim=1)
@@ -187,10 +229,18 @@ class Agent(nn.Module):
         )
 
 
-def make_env():
+def make_env(config=None):
     """Factory pour environnement."""
     def thunk():
-        env = CorridorEnv(max_steps=1000)  # Réduit à 1000 steps pour avoir plus d'épisodes
+        if config and 'environment' in config:
+            env_config = config['environment']
+            max_steps = env_config.get('max_steps', 1000)
+            corridor_xml = env_config.get('corridor_xml', None)
+        else:
+            max_steps = 1000
+            corridor_xml = None
+            
+        env = CorridorEnv(max_steps=max_steps, corridor_xml=corridor_xml)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env = gym.wrappers.ClipAction(env)
         return env
@@ -336,22 +386,77 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
         print("Continuons sans render...")
 
 
-def train(
-    total_timesteps=8_000_000,
-    num_envs=32,           # PARALLÉLISATION: 32 envs simultanés
-    num_steps=1024,        # Steps par rollout par env
-    num_minibatches=32,    # Minibatches pour update
-    update_epochs=10,      # Epochs par update
-    lr=5e-4,  # Apprentissage plus rapide
-    gamma=0.995,  # Discount plus élevé pour mieux propager les récompenses lointaines
-    gae_lambda=0.98,  # GAE plus élevé pour meilleur credit assignment
-    clip_coef=0.2,
-    ent_coef=0.05,  # Exploration augmentée pour découvrir les stratégies d'évitement
-    vf_coef=0.5,
-    max_grad_norm=0.5,
-    seed=1,
-):
-    """Entraînement PPO optimisé."""
+def train(config_path="config.json", **kwargs):
+    """Entraînement PPO optimisé avec configuration JSON."""
+    
+    # Charger configuration
+    config = load_config(config_path)
+    
+    # Paramètres par défaut (si pas de config ou valeurs manquantes)
+    defaults = {
+        'total_timesteps': 8_000_000,
+        'num_envs': 32,
+        'num_steps': 1024,
+        'num_minibatches': 32,
+        'update_epochs': 10,
+        'lr': 5e-4,
+        'gamma': 0.995,
+        'gae_lambda': 0.98,
+        'clip_coef': 0.2,
+        'ent_coef': 0.05,
+        'vf_coef': 0.5,
+        'max_grad_norm': 0.5,
+        'seed': 1,
+    }
+    
+    # Fusionner config avec kwargs (kwargs prioritaires)
+    if config:
+        # Extraire les paramètres de training et ppo
+        training_params = config.get('training', {})
+        ppo_params = config.get('ppo', {})
+        optimizer_params = config.get('optimizer', {})
+        logging_params = config.get('logging', {})
+        
+        # Fusionner tous les paramètres
+        params = {}
+        params.update(training_params)
+        params.update(ppo_params)
+        params.update(optimizer_params)
+        params.update(logging_params)
+        
+        # Appliquer les valeurs par défaut pour les paramètres manquants
+        for key, default_value in defaults.items():
+            params[key] = params.get(key, default_value)
+    else:
+        params = defaults.copy()
+    
+    # Appliquer les kwargs (priorité maximale)
+    params.update(kwargs)
+    
+    # Extraire les paramètres
+    total_timesteps = params['total_timesteps']
+    num_envs = params['num_envs']
+    num_steps = params['num_steps']
+    num_minibatches = params['num_minibatches']
+    update_epochs = params['update_epochs']
+    lr = params['lr']
+    gamma = params['gamma']
+    gae_lambda = params['gae_lambda']
+    clip_coef = params['clip_coef']
+    ent_coef = params['ent_coef']
+    vf_coef = params['vf_coef']
+    max_grad_norm = params['max_grad_norm']
+    seed = params['seed']
+    
+    # Paramètres de logging
+    log_interval = params.get('log_interval', 2)
+    save_interval = params.get('save_interval', 10)
+    render_interval = params.get('render_interval', 5)
+    plot_interval = params.get('plot_interval', 5)
+    batch_size_metrics = params.get('batch_size_metrics', 20)
+    
+    # Paramètres optimizer
+    optimizer_eps = params.get('eps', 1e-5)
     
     # Seed
     np.random.seed(seed)
@@ -360,13 +465,14 @@ def train(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Calculs batch
-    batch_size = num_envs * num_steps  # 32 × 1024 = 32768
-    minibatch_size = batch_size // num_minibatches  # 1024
+    batch_size = num_envs * num_steps
+    minibatch_size = batch_size // num_minibatches
     num_iterations = total_timesteps // batch_size
     
     print("=" * 70)
     print("PPO OPTIMISÉ - ENTRAÎNEMENT PARALLÈLE")
     print("=" * 70)
+    print(f"Configuration: {config_path}")
     print(f"Device: {device}")
     print(f"Environnements parallèles: {num_envs}")
     print(f"Steps par rollout: {num_steps}")
@@ -374,20 +480,30 @@ def train(
     print(f"Minibatch size: {minibatch_size:,}")
     print(f"Iterations: {num_iterations}")
     print(f"Total timesteps: {total_timesteps:,}")
+    print(f"Learning rate: {lr}")
+    print(f"Gamma: {gamma}")
+    print(f"GAE Lambda: {gae_lambda}")
     print("=" * 70 + "\n")
     
     # Environnements parallèles avec corridors aléatoires
-    envs = gym.vector.AsyncVectorEnv([make_env() for _ in range(num_envs)])
+    envs = gym.vector.AsyncVectorEnv([make_env(config) for _ in range(num_envs)])
     
     # Environnement de debug pour visualisation
-    debug_env = CorridorEnv(max_steps=1000)  # Même durée que les envs d'entraînement
+    if config and 'environment' in config:
+        env_config = config['environment']
+        debug_max_steps = env_config.get('max_steps', 1000)
+        debug_corridor_xml = env_config.get('corridor_xml', None)
+    else:
+        debug_max_steps = 1000
+        debug_corridor_xml = None
+    debug_env = CorridorEnv(max_steps=debug_max_steps, corridor_xml=debug_corridor_xml)
     
     obs_dim = envs.single_observation_space.shape[0]
     act_dim = envs.single_action_space.shape[0]
     
-    # Agent
-    agent = Agent(obs_dim, act_dim).to(device)
-    optimizer = optim.Adam(agent.parameters(), lr=lr, eps=1e-5)
+    # Agent avec configuration
+    agent = Agent(obs_dim, act_dim, config).to(device)
+    optimizer = optim.Adam(agent.parameters(), lr=lr, eps=optimizer_eps)
     
     # DÉTECTION ET CHARGEMENT DE MODÈLE EXISTANT
     start_iteration = 1
@@ -448,9 +564,8 @@ def train(
     successes = 0
     total_episodes = 0
     
-    # Métriques par batch de 20 épisodes (pour avoir plus de points)
+    # Métriques par batch (configurable)
     batch_metrics = []
-    batch_size = 20  # Réduit à 20 pour avoir plus de points sur le graphique
     last_batch_episode = 0  # Dernier épisode traité pour les batches
     
     # Compteur raisons de terminaison
@@ -611,11 +726,11 @@ def train(
         sps = int(global_step / elapsed)
         
         # === LOGGING PROPRE PAR ITÉRATION ===
-        if iteration % 2 == 0 or iteration == 1:
-            # Vérifier si on a complété un nouveau batch de 100 épisodes
-            while total_episodes >= last_batch_episode + batch_size:
+        if iteration % log_interval == 0 or iteration == 1:
+            # Vérifier si on a complété un nouveau batch d'épisodes
+            while total_episodes >= last_batch_episode + batch_size_metrics:
                 batch_start = last_batch_episode
-                batch_end = last_batch_episode + batch_size
+                batch_end = last_batch_episode + batch_size_metrics
                 
                 # Calculer moyennes pour ce batch de 100 épisodes
                 batch_returns = episode_returns[batch_start:batch_end]
@@ -634,7 +749,7 @@ def train(
                     'mean_return': np.mean(batch_returns),
                     'mean_distance': np.mean(batch_distances),
                     'mean_survival': np.mean(batch_steps_list),
-                    'success_rate': 100 * batch_successes / batch_size,
+                    'success_rate': 100 * batch_successes / batch_size_metrics,
                 })
                 
                 last_batch_episode = batch_end
@@ -652,7 +767,7 @@ def train(
                 
                 success_rate = 100 * successes / max(1, total_episodes)
                 print(f"📊 ÉPISODES: {total_episodes} total | Succès: {successes} ({success_rate:.1f}%)")
-                print(f"📊 BATCHES: {len(batch_metrics)} batches de 100 épisodes complétés")
+                print(f"📊 BATCHES: {len(batch_metrics)} batches de {batch_size_metrics} épisodes complétés")
                 print(f"📈 RETURN  : Récent {np.mean(recent_ret):>7.1f} ± {np.std(recent_ret):>5.1f} | Meilleur {best_return:>7.1f}")
                 print(f"🎯 DISTANCE: Récent {np.mean(recent_dist):>7.1f}m ± {np.std(recent_dist):>5.1f}m | Meilleur {best_distance:>7.1f}m")
                 print(f"⏱️  SURVIE  : Récent {np.mean(recent_steps):>7.0f} steps ± {np.std(recent_steps):>5.0f}")
@@ -668,7 +783,7 @@ def train(
             print(f"{'='*70}")
         
         # Sauvegarde périodique
-        if iteration % 10 == 0:
+        if iteration % save_interval == 0:
             model_path = f"models/ppo_corridor_{global_step}.pth"
             torch.save(agent.state_dict(), model_path)
             print(f"💾 Modèle sauvegardé: {model_path}")
@@ -690,12 +805,12 @@ def train(
                 
                 print(f"📊 Métriques sauvegardées: {metrics_file}")
         
-        # Afficher graphiques toutes les 5 itérations
-        if iteration % 5 == 0 and iteration > 0 and batch_metrics:
+        # Afficher graphiques
+        if iteration % plot_interval == 0 and iteration > 0 and batch_metrics:
             plot_training_progress(batch_metrics, iteration)
         
-        # Debug render toutes les 5 itérations
-        if iteration % 5 == 0:
+        # Debug render
+        if iteration % render_interval == 0:
             debug_render_episode(agent, debug_env, device)
     
     # === FIN ===
@@ -753,18 +868,29 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser()
-    parser.add_argument("--timesteps", type=int, default=8_000_000)
-    parser.add_argument("--num-envs", type=int, default=32)
-    parser.add_argument("--num-steps", type=int, default=1024)
-    parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--config", type=str, default="config.json", help="Fichier de configuration JSON")
+    parser.add_argument("--timesteps", type=int, help="Override total timesteps")
+    parser.add_argument("--num-envs", type=int, help="Override nombre d'environnements")
+    parser.add_argument("--num-steps", type=int, help="Override steps par rollout")
+    parser.add_argument("--lr", type=float, help="Override learning rate")
+    parser.add_argument("--seed", type=int, help="Override seed")
     parser.add_argument("--fresh-start", action="store_true", help="Forcer un nouveau démarrage (ignorer modèles existants)")
     args = parser.parse_args()
     
-    train(
-        total_timesteps=args.timesteps,
-        num_envs=args.num_envs,
-        num_steps=args.num_steps,
-        lr=args.lr,
-        seed=args.seed,
-    )
+    # Préparer les kwargs pour override
+    kwargs = {}
+    if args.timesteps is not None:
+        kwargs['total_timesteps'] = args.timesteps
+    if args.num_envs is not None:
+        kwargs['num_envs'] = args.num_envs
+    if args.num_steps is not None:
+        kwargs['num_steps'] = args.num_steps
+    if args.lr is not None:
+        kwargs['lr'] = args.lr
+    if args.seed is not None:
+        kwargs['seed'] = args.seed
+    
+    # Rendre args accessible globalement pour fresh_start
+    globals()['args'] = args
+    
+    train(config_path=args.config, **kwargs)

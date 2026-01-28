@@ -169,10 +169,11 @@ class CorridorEnv(gym.Env):
         # Construire carte (sera regénérée à chaque reset si random_corridor=True)
         self.cell_map = self._build_cell_map()
         
-        # Espaces - UN SEUL CNN + historique étendu
-        # Historique: 8 positions × (8 coords + 3 vitesses) = 8 × 11 = 88 valeurs
-        history_size = self.history_length * 11  # positions (8) + vitesses (3) par frame
-        obs_size = 7 + 8 + history_size + (self.grid_rows * self.grid_cols)  # 7 + 8 + 88 + 1800 = 1903 (ajout angle)
+        # Espaces - CNN 2 canaux + historique simplifié (sans bounding box)
+        # Historique: 8 positions × (3 coords + 3 vitesses) = 8 × 6 = 48 valeurs
+        history_size = self.history_length * 6  # positions (3) + vitesses (3) par frame
+        grid_size = self.grid_rows * self.grid_cols * 2  # 60×30×2 = 3600 (2 canaux)
+        obs_size = 7 + history_size + grid_size  # 7 + 48 + 3600 = 3655 (sans bounding box)
         self.observation_space = spaces.Box(-np.inf, np.inf, (obs_size,), np.float32)
         # CONTRÔLE PAR VOLANT : 2 actions au lieu de 4
         # action[0] = steering_angle (±1.0 → ±30°)
@@ -273,7 +274,7 @@ class CorridorEnv(gym.Env):
         return self._get_obs(), reward, terminated, truncated, info
     
     def _get_obs(self):
-        """Observation avec historique des positions pour anticipation."""
+        """Observation simplifiée avec historique des positions pour anticipation."""
         pos = self.data.qpos[:3]
         vel = self.data.qvel[:3]
         
@@ -281,23 +282,19 @@ class CorridorEnv(gym.Env):
         quat = self.data.qpos[3:7]
         robot_angle = 2 * np.arctan2(quat[3], quat[0])  # Angle en radians
         
-        # Bounding box du robot (4 coins dans repère grille)
-        bbox_corners = self._get_robot_bbox_corners(pos[0], pos[1])
-        
-        # Historique des positions (5 positions × 3 coords = 15 valeurs)
+        # Historique des positions (plus de bounding box dans l'obs principale)
         position_history = self._get_position_history_obs()
         
-        # Grille environnement
-        grid = self._get_grid_obs(pos[0], pos[1])
+        # Grille environnement 2 canaux
+        grid = self._get_grid_obs(pos[0], pos[1])  # 60×30×2
         
         return np.concatenate([
             pos,                    # 3 valeurs (position actuelle)
             vel,                    # 3 valeurs (vitesse actuelle)
             [robot_angle],          # 1 valeur (angle du robot)
-            bbox_corners,           # 8 valeurs (4 coins × 2 coords actuels)
-            position_history,       # 88 valeurs (8 frames × 11 valeurs: 8 coins + 3 vitesses)
-            grid.flatten()          # 1800 valeurs (60×30)
-        ]).astype(np.float32)       # Total: 7 + 8 + 88 + 1800 = 1903 valeurs
+            position_history,       # 48 valeurs (8 frames × 6 valeurs: 3 positions + 3 vitesses)
+            grid.flatten()          # 3600 valeurs (60×30×2)
+        ]).astype(np.float32)       # Total: 7 + 48 + 3600 = 3655 valeurs
     
     def _get_robot_bbox_corners(self, robot_x, robot_y):
         """Position des 4 coins de la bounding box dans le repère de la grille EGO-CENTRIQUE.
@@ -348,15 +345,15 @@ class CorridorEnv(gym.Env):
         return np.array(corners_grid, dtype=np.float32)
     
     def _update_position_history(self):
-        """Mettre à jour l'historique des 4 coins + vitesses."""
-        # Calculer les 4 coins actuels dans le repère grille
-        current_corners = self._get_robot_bbox_corners(self.data.qpos[0], self.data.qpos[1])
+        """Mettre à jour l'historique des positions + vitesses (sans bounding box)."""
+        # Position actuelle (x, y, z)
+        current_position = self.data.qpos[:3].copy()
         
         # Vitesses actuelles
         current_velocities = self.data.qvel[:3].copy()  # vx, vy, vz
         
-        # Stocker coins + vitesses (8 + 3 = 11 valeurs)
-        frame_data = np.concatenate([current_corners, current_velocities])
+        # Stocker position + vitesses (3 + 3 = 6 valeurs par frame)
+        frame_data = np.concatenate([current_position, current_velocities])
         self.position_history.append(frame_data)
         
         # Garder seulement les N dernières positions
@@ -364,38 +361,48 @@ class CorridorEnv(gym.Env):
             self.position_history.pop(0)
     
     def _get_position_history_obs(self):
-        """Obtenir l'historique des 4 coins + vitesses en coordonnées RELATIVES."""
+        """Obtenir l'historique des positions + vitesses en coordonnées RELATIVES."""
         # État actuel
-        current_corners = self._get_robot_bbox_corners(self.data.qpos[0], self.data.qpos[1])
+        current_position = self.data.qpos[:3]
         current_velocities = self.data.qvel[:3]
         
         history_obs = []
         
         for i in range(self.history_length):
             if i < len(self.position_history):
-                # Frame passée (8 coins + 3 vitesses)
+                # Frame passée (3 positions + 3 vitesses = 6 valeurs)
                 past_frame = self.position_history[i]
-                past_corners = past_frame[:8]  # 8 premiers = coins
-                past_velocities = past_frame[8:]  # 3 derniers = vitesses
+                past_position = past_frame[:3]  # 3 premiers = position
+                past_velocities = past_frame[3:]  # 3 derniers = vitesses
                 
-                # Coins relatifs (différence par rapport à position actuelle)
-                relative_corners = past_corners - current_corners
+                # Position relative (différence par rapport à position actuelle)
+                relative_position = past_position - current_position
                 
                 # Vitesses relatives (différence par rapport à vitesse actuelle)
                 relative_velocities = past_velocities - current_velocities
                 
-                # Combiner coins + vitesses (8 + 3 = 11 valeurs)
-                history_obs.extend(relative_corners)
+                # Combiner position + vitesses (3 + 3 = 6 valeurs)
+                history_obs.extend(relative_position)
                 history_obs.extend(relative_velocities)
             else:
                 # Remplir avec zéros si pas assez d'historique
-                history_obs.extend([0.0] * 11)  # 8 coins + 3 vitesses
+                history_obs.extend([0.0] * 6)  # 3 positions + 3 vitesses
         
         return np.array(history_obs, dtype=np.float32)
     
     def _get_grid_obs(self, robot_x, robot_y):
-        """Grille unique 60×30 avec environnement, CENTRÉE ET ORIENTÉE selon le robot."""
-        grid = np.zeros((self.grid_rows, self.grid_cols), dtype=np.float32)
+        """Grille 2 canaux 60×30×2 avec environnement, CENTRÉE ET ORIENTÉE selon le robot.
+        
+        Canal 0: Obstacles/Bumps (1.0 = bump OU murs latéraux, 0.0 = navigable)
+        Canal 1: Trous (1.0 = trou OU extérieur avant/arrière, 0.0 = navigable)
+        
+        Sol navigable = les deux canaux à 0.0
+        Logique physique:
+        - Côtés gauche/droite du couloir = murs infinis (obstacles)
+        - Devant/derrière du couloir = vide (trous, robot tombe)
+        """
+        # 2 canaux binaires : [obstacles, trous]
+        grid = np.zeros((self.grid_rows, self.grid_cols, 2), dtype=np.float32)
         
         # Récupérer l'angle du robot
         quat = self.data.qpos[3:7]
@@ -429,24 +436,35 @@ class CorridorEnv(gym.Env):
                 
                 # Vérifier si en dehors du couloir
                 if world_y < -self.corridor_width/2 or world_y > self.corridor_width/2:
-                    # En dehors du couloir = valeur distincte -1.0
-                    grid[i, j] = -1.0
+                    # En dehors du couloir sur les CÔTÉS = bump à l'infini (obstacle)
+                    grid[i, j, 0] = 1.0  # Obstacle (mur latéral)
+                    grid[i, j, 1] = 0.0  # Pas de trou
+                elif world_x < 0 or world_x > self.corridor_length:
+                    # En dehors du couloir DEVANT/DERRIÈRE = trou (vide)
+                    grid[i, j, 0] = 0.0  # Pas d'obstacle
+                    grid[i, j, 1] = 1.0  # Trou (extérieur avant/arrière)
                 else:
-                    # Chercher dans la carte des cellules
+                    # Dans le couloir : chercher dans la carte des cellules
                     cell_type = self.cell_map.get((world_row, world_col), 2)  # Défaut trou
                     
-                    # Normaliser: 0=sol, 0.5=bump, 1=trou
-                    if cell_type == 0:
-                        grid[i, j] = 0.0  # Sol
-                    elif cell_type == 1:
-                        grid[i, j] = 0.5  # Bump
-                    else:  # cell_type == 2
-                        grid[i, j] = 1.0  # Trou
+                    # Remplir les 2 canaux binaires
+                    if cell_type == 0:  # Sol
+                        grid[i, j, 0] = 0.0  # Pas d'obstacle
+                        grid[i, j, 1] = 0.0  # Pas de trou
+                        # Sol = les deux canaux à 0.0
+                    elif cell_type == 1:  # Bump
+                        grid[i, j, 0] = 1.0  # Obstacle (bump)
+                        grid[i, j, 1] = 0.0  # Pas de trou
+                    else:  # cell_type == 2, Trou
+                        grid[i, j, 0] = 0.0  # Pas d'obstacle
+                        grid[i, j, 1] = 1.0  # Trou
+        
+        return grid
         
         return grid
     
     def _compute_reward(self):
-        """Récompense SIMPLE: avancer = bien, tomber = mal."""
+        """Récompense SIMPLE et naturelle: avancer = bien, échouer = mal."""
         x = self.data.qpos[0]
         y = self.data.qpos[1]
         z = self.data.qpos[2]
@@ -464,30 +482,22 @@ class CorridorEnv(gym.Env):
             info['reason'] = 'fell'
             return -10.0, True, info
         
-        # Échec: retourné
+        # Échec: robot retourné
         quat = self.data.qpos[3:7]
         up_z = 1 - 2 * (quat[1]**2 + quat[2]**2)
         if up_z < 0:
             info['reason'] = 'flipped'
             return -10.0, True, info
         
-        # Pas de vérification out_of_bounds : le robot tombera naturellement dans le vide
-        
-        # Détection de collision avec les bumps (piliers)
+        # Échec: collision avec les bumps (piliers)
         if self._is_colliding_with_bump():
             info['reason'] = 'collision'
-            return -20.0, True, info  # Pénalité FORTE pour collision avec pilier
+            return -10.0, True, info
         
-        # Pénalité pour proximité des bumps (encourage l'évitement préventif)
-        bump_penalty = self._get_bump_proximity_penalty()
-        
-        # Bonus pour tourner quand il y a un bump devant (encourage l'apprentissage de rotation)
-        rotation_bonus = self._get_rotation_bonus(bump_penalty)
-        
-        # Récompense SIMPLE: progression + pénalité proximité + bonus rotation
+        # Récompense SIMPLE: progression uniquement
         delta_x = x - self.prev_x
         self.prev_x = x
-        reward = delta_x * 2.0 + bump_penalty + rotation_bonus
+        reward = delta_x * 10.0  # Récompense pour avancer
         
         info['reason'] = None
         return reward, terminated, info
@@ -516,56 +526,6 @@ class CorridorEnv(gym.Env):
                 return True
         
         return False
-    
-    def _get_bump_proximity_penalty(self):
-        """Pénalise les bumps devant le robot avec un 'rayon laser' - pénalité inversement proportionnelle à la distance."""
-        # Regarder dans la grille autour du robot
-        grid = self._get_grid_obs(self.data.qpos[0], self.data.qpos[1])
-        
-        # Rayon laser : une seule colonne devant le robot
-        robot_row = self.robot_row_in_grid  # 8
-        robot_col = self.grid_cols // 2     # 15 (centre)
-        
-        # Scanner 2m devant (20 cellules) dans la colonne centrale
-        max_scan_distance = 20  # 2m = 20 cellules de 0.1m
-        
-        penalty = 0.0
-        
-        # Scanner cellule par cellule devant le robot
-        for i in range(1, max_scan_distance + 1):  # Commencer à 1 (pas sur le robot)
-            scan_row = robot_row + i
-            
-            # Vérifier si on est encore dans la grille
-            if scan_row >= self.grid_rows:
-                break
-                
-            # Vérifier si c'est un bump
-            if grid[scan_row, robot_col] == 0.5:  # Bump détecté !
-                # Distance en mètres
-                distance_m = i * self.cell_size  # i cellules × 0.1m
-                
-                # Pénalité inversement proportionnelle : plus proche = plus pénalisant
-                # À 0.1m → -0.1, à 1m → -0.01, à 2m → -0.005
-                bump_penalty = -0.01 / distance_m
-                penalty += bump_penalty
-                
-                # Arrêter au premier bump (le plus proche)
-                break
-        
-        return penalty
-    
-    def _get_rotation_bonus(self, bump_penalty):
-        """Bonus pour tourner quand il y a un bump devant (force l'apprentissage de rotation)."""
-        # Si il y a un bump devant (bump_penalty < 0) ET qu'il tourne
-        if bump_penalty < 0:
-            # Mesurer la vitesse de rotation
-            angular_velocity = abs(self.data.qvel[5])  # Vitesse angulaire en Z
-            
-            # Bonus si il tourne quand il y a un bump devant
-            if angular_velocity > 0.5:  # S'il tourne assez vite (>28°/s, soit ~1/3 de la vitesse max)
-                return 0.02  # Petit bonus pour tourner face à un obstacle
-        
-        return 0.0
     
     def _get_info(self):
         return {
