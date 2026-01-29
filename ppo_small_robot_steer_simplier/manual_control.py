@@ -6,7 +6,51 @@ import numpy as np
 import mujoco
 from mujoco import viewer
 import time
+import argparse
 from corridor_env import CorridorEnv
+
+# Import du générateur pour les corridors aléatoires
+try:
+    from corridor_generator_similar import CorridorGenerator
+    CorridorGenerator = CorridorGenerator
+except ImportError:
+    print("⚠️  Générateur de corridor non disponible!")
+    CorridorGenerator = None
+
+
+def generate_random_corridor(seed=None):
+    """Génère un corridor aléatoire temporaire."""
+    if CorridorGenerator is None:
+        print("❌ Générateur de corridor non disponible!")
+        return None
+    
+    if seed is None:
+        seed = np.random.randint(0, 10000)
+    
+    print(f"🎲 Génération d'un corridor aléatoire (seed={seed})...")
+    
+    generator = CorridorGenerator()
+    temp_filename = f"temp_manual_corridor_{seed}.xml"
+    
+    try:
+        # Générer avec des paramètres variés
+        length = np.random.uniform(80.0, 120.0)
+        width = np.random.uniform(2.5, 3.5)
+        
+        generator.save_corridor(temp_filename, length, width, seed)
+        
+        # Statistiques
+        bumps = generator.generate_bump_pattern(length, seed)
+        holes = generator.generate_hole_pattern(length, seed)
+        
+        print(f"✅ Corridor généré: {length:.1f}m × {width:.1f}m")
+        print(f"   {len(bumps)} bumps, {len(holes)} trous")
+        
+        return temp_filename
+        
+    except Exception as e:
+        print(f"❌ Erreur génération corridor: {e}")
+        return None
 
 
 class ManualController:
@@ -135,12 +179,35 @@ class ManualController:
 
 
 def main():
+    # Arguments de ligne de commande
+    parser = argparse.ArgumentParser(description="Contrôle manuel du robot dans le corridor")
+    parser.add_argument("--random", action="store_true", help="Générer un corridor aléatoire")
+    parser.add_argument("--seed", type=int, help="Seed pour la génération aléatoire")
+    parser.add_argument("--corridor", type=str, default="corridor_3x100_no_full_obstacles.xml", 
+                       help="Fichier XML du corridor à utiliser")
+    
+    args = parser.parse_args()
+    
     print("🚗 CONTRÔLE MANUEL DU ROBOT")
     print("=" * 50)
     
-    # Créer environnement
-    env = CorridorEnv(max_steps=10000)  # Pas de limite de temps
+    # Déterminer le corridor à utiliser
+    corridor_xml = args.corridor
+    temp_file = None
+    
+    # Si --random OU --seed est fourni, générer un corridor
+    if args.random or args.seed is not None:
+        temp_file = generate_random_corridor(args.seed)
+        if temp_file:
+            corridor_xml = temp_file
+        else:
+            print("⚠️  Utilisation du corridor par défaut à la place")
+    
+    # Créer environnement avec le corridor choisi
+    env = CorridorEnv(max_steps=10000, corridor_xml=corridor_xml)  # Pas de limite de temps
     controller = ManualController()
+    
+    print(f"🏁 Corridor utilisé: {corridor_xml}")
     
     # Reset initial
     obs, info = env.reset()
@@ -299,6 +366,15 @@ def main():
         traceback.print_exc()
     finally:
         env.close()
+        
+        # Nettoyer le fichier temporaire si créé
+        if temp_file:
+            try:
+                import os
+                os.remove(temp_file)
+                print(f"🗑️  Fichier temporaire supprimé: {temp_file}")
+            except Exception as e:
+                print(f"⚠️  Impossible de supprimer {temp_file}: {e}")
 
 
 if __name__ == "__main__":

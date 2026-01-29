@@ -108,34 +108,34 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class Agent(nn.Module):
-    """CNN UNIQUE + MLP simplifié."""
+    """CNN SIMPLIFIÉ + MLP réduit - Architecture allégée."""
     
     def __init__(self, obs_dim, act_dim, config=None):
         super().__init__()
         
-        # Configuration par défaut ou depuis config
+        # Configuration simplifiée
         if config and 'network' in config:
             net_config = config['network']
             self.robot_state_dim = net_config.get('robot_state_dim', 7)
-            self.history_dim = net_config.get('history_dim', 48)  # 8 × 6 = 48
+            self.history_dim = net_config.get('history_dim', 24)  # Réduit: 4 × 6 = 24
             self.grid_dim = net_config.get('grid_dim', 3600)  # 60×30×2 = 3600
-            robot_hidden = net_config.get('robot_net_hidden', [64, 64])
-            history_hidden = net_config.get('history_net_hidden', [128, 64, 32])
-            cnn_channels = net_config.get('cnn_channels', [32, 64, 128])
-            backbone_hidden = net_config.get('backbone_hidden', [128, 64])
+            robot_hidden = net_config.get('robot_net_hidden', [32])  # Simplifié
+            history_hidden = net_config.get('history_net_hidden', [64, 32])  # Simplifié
+            cnn_channels = net_config.get('cnn_channels', [32, 64])  # 2 couches seulement
+            backbone_hidden = net_config.get('backbone_hidden', [64])  # Simplifié
         else:
-            # Valeurs par défaut
+            # Valeurs par défaut SIMPLIFIÉES
             self.robot_state_dim = 7
-            self.history_dim = 48  # 8 × 6 = 48
+            self.history_dim = 24  # Réduit: 4 frames × 6 valeurs = 24
             self.grid_dim = 3600  # 60×30×2 = 3600
-            robot_hidden = [64, 64]
-            history_hidden = [128, 64, 32]
-            cnn_channels = [32, 64, 128]
-            backbone_hidden = [128, 64]
+            robot_hidden = [32]  # Une seule couche
+            history_hidden = [64, 32]  # Deux couches au lieu de trois
+            cnn_channels = [32, 64]  # 2 couches au lieu de 3
+            backbone_hidden = [64]  # Une seule couche
         
-        # MLP pour état robot (position + vitesse + angle)
+        # MLP pour état robot SIMPLIFIÉ (position + vitesse + angle)
         robot_layers = []
-        prev_dim = self.robot_state_dim  # 7 valeurs (pas de bbox)
+        prev_dim = self.robot_state_dim  # 7 valeurs
         for hidden_dim in robot_hidden:
             robot_layers.extend([
                 layer_init(nn.Linear(prev_dim, hidden_dim)),
@@ -144,9 +144,9 @@ class Agent(nn.Module):
             prev_dim = hidden_dim
         self.robot_net = nn.Sequential(*robot_layers)
         
-        # MLP pour historique des positions + vitesses (anticipation)
+        # MLP pour historique RÉDUIT (anticipation)
         history_layers = []
-        prev_dim = self.history_dim
+        prev_dim = self.history_dim  # 24 au lieu de 48
         for hidden_dim in history_hidden:
             history_layers.extend([
                 layer_init(nn.Linear(prev_dim, hidden_dim)),
@@ -155,7 +155,7 @@ class Agent(nn.Module):
             prev_dim = hidden_dim
         self.history_net = nn.Sequential(*history_layers)
         
-        # CNN pour grille 60×30×2 (2 canaux)
+        # CNN SIMPLIFIÉ pour grille 60×30×2 (SEULEMENT 2 COUCHES)
         cnn_layers = []
         in_channels = 2  # 2 canaux : obstacles, trous
         for out_channels in cnn_channels:
@@ -165,17 +165,17 @@ class Agent(nn.Module):
             ])
             in_channels = out_channels
         
-        # Calculer la taille après convolutions (60×30 → 8×4 après 3 conv stride=2)
-        final_size = cnn_channels[-1] * 8 * 4  # 128 * 8 * 4 = 4096
+        # Calculer la taille après 2 convolutions (57×40 → 15×10 après 2 conv stride=2)
+        final_size = cnn_channels[-1] * 15 * 10  # 64 * 15 * 10 = 9600
         cnn_layers.extend([
             nn.Flatten(),
-            layer_init(nn.Linear(final_size, backbone_hidden[0])),
+            layer_init(nn.Linear(final_size, backbone_hidden[0])),  # 9600 → 64
             nn.Tanh()
         ])
         self.cnn = nn.Sequential(*cnn_layers)
         
-        # Backbone combiné
-        backbone_input_dim = robot_hidden[-1] + history_hidden[-1] + backbone_hidden[0]
+        # Backbone combiné SIMPLIFIÉ
+        backbone_input_dim = robot_hidden[-1] + history_hidden[-1] + backbone_hidden[0]  # 32 + 32 + 64 = 128
         backbone_layers = []
         prev_dim = backbone_input_dim
         for hidden_dim in backbone_hidden:
@@ -193,19 +193,19 @@ class Agent(nn.Module):
         self.critic = layer_init(nn.Linear(final_dim, 1), std=1.0)
     
     def forward(self, obs):
-        # Décoder observation: pos(3) + vel(3) + angle(1) + history(48) + grid(3600)
+        # Décoder observation SIMPLIFIÉE: pos(3) + vel(3) + angle(1) + history(24) + grid(3600)
         robot_state = obs[:, :self.robot_state_dim]  # 0:7 (pos + vel + angle)
         
         history_start = self.robot_state_dim  # 7
-        history = obs[:, history_start:history_start+self.history_dim]  # 7:55
-        grid = obs[:, history_start+self.history_dim:].view(-1, 2, 60, 30)  # 55:3655 → (batch, 2, 60, 30)
+        history = obs[:, history_start:history_start+self.history_dim]  # 7:31 (24 valeurs)
+        grid = obs[:, history_start+self.history_dim:].view(-1, 2, 57, 40)  # 31:4591 → (batch, 2, 57, 40)
         
-        # Traiter séparément
-        robot_feat = self.robot_net(robot_state)      # 7 → 64
-        history_feat = self.history_net(history)      # 48 → 32
-        grid_feat = self.cnn(grid)                    # 3600 → 128
+        # Traiter séparément avec architecture SIMPLIFIÉE
+        robot_feat = self.robot_net(robot_state)      # 7 → 32
+        history_feat = self.history_net(history)      # 24 → 32
+        grid_feat = self.cnn(grid)                    # 4560 → 64
         
-        # Combiner les trois sources
+        # Combiner les trois sources (32 + 32 + 64 = 128)
         combined = torch.cat([robot_feat, history_feat, grid_feat], dim=1)
         return self.backbone(combined)
     
@@ -230,15 +230,18 @@ class Agent(nn.Module):
 
 
 def make_env(config=None):
-    """Factory pour environnement."""
+    """Factory pour environnement avec corridors aléatoires générés EN MÉMOIRE."""
     def thunk():
         if config and 'environment' in config:
             env_config = config['environment']
             max_steps = env_config.get('max_steps', 1000)
-            corridor_xml = env_config.get('corridor_xml', None)
+            use_random = env_config.get('use_random_corridor', True)
         else:
             max_steps = 1000
-            corridor_xml = None
+            use_random = True
+        
+        # Utiliser corridor_xml=None pour générer aléatoirement EN MÉMOIRE
+        corridor_xml = None if use_random else "corridor_3x100_no_full_obstacles.xml"
             
         env = CorridorEnv(max_steps=max_steps, corridor_xml=corridor_xml)
         env = gym.wrappers.RecordEpisodeStatistics(env)
@@ -319,37 +322,38 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
                     stabilizing = " (STABILISATION)" if step < debug_env.stabilization_steps else ""
                     print(f"Step {step}: x={x:.2f}m, reward={reward:.3f}, return={ep_return:.1f}{stabilizing}")
                     
-                    # Décoder l'observation AVEC ANGLE + HISTORIQUE ÉTENDU
+                    # Décoder l'observation SIMPLIFIÉE AVEC HISTORIQUE RÉDUIT
                     robot_state = obs[:7]  # pos(3) + vel(3) + angle(1)
-                    history_extended = obs[7:55].reshape(8, 6)  # 8 frames × 6 valeurs (3 pos + 3 vel)
-                    grid = obs[55:].reshape(60, 30, 2)  # Grille 60×30×2 (2 canaux)
+                    history_simplified = obs[7:31].reshape(4, 6)  # 4 frames × 6 valeurs (3 pos + 3 vel)
+                    grid = obs[31:].reshape(57, 40, 2)  # Grille 57×40×2 (2 canaux, plus large)
                     
                     print(f"  Robot: pos=({robot_state[0]:.2f}, {robot_state[1]:.2f}, {robot_state[2]:.2f}), vel=({robot_state[3]:.2f}, {robot_state[4]:.2f}, {robot_state[5]:.2f}), angle={robot_state[6]:.2f}rad ({np.degrees(robot_state[6]):.1f}°)")
                     
                     # Afficher historique simplifié (dernière frame)
-                    last_frame = history_extended[-1]  # 6 valeurs: pos(3) + vel(3)
+                    last_frame = history_simplified[-1]  # 6 valeurs: pos(3) + vel(3)
                     last_pos = last_frame[:3]
                     last_vel = last_frame[3:]
-                    print(f"  Historique: dernière pos=({last_pos[0]:+.2f}, {last_pos[1]:+.2f}, {last_pos[2]:+.2f}), vel=({last_vel[0]:+.2f}, {last_vel[1]:+.2f}, {last_vel[2]:+.2f})")
+                    print(f"  Historique (4 frames): dernière pos=({last_pos[0]:+.2f}, {last_pos[1]:+.2f}, {last_pos[2]:+.2f}), vel=({last_vel[0]:+.2f}, {last_vel[1]:+.2f}, {last_vel[2]:+.2f})")
                     
                     # Afficher grille (20 lignes × TOUTE la largeur 30 colonnes) - Canal 0 (obstacles)
                     obstacles_grid = grid[:, :, 0]  # Canal obstacles
                     trous_grid = grid[:, :, 1]      # Canal trous
                     
-                    print("  GRILLE (lignes 0-19, EGO-CENTRIQUE - tourne avec robot):")
-                    for i in range(20):  # Lignes 0-19 (robot à ligne 8)
+                    print("  GRILLE (lignes 0-19, EGO-CENTRIQUE - tourne avec robot, PLUS LARGE):")
+                    for i in range(20):  # Lignes 0-19 (robot à ligne 5 maintenant)
                         line = "    "
-                        for j in range(30):  # TOUTES les colonnes (0-29, robot au centre col 15)
+                        for j in range(40):  # TOUTES les colonnes (0-39, robot au centre col 20)
                             if obstacles_grid[i, j] > 0.5:
                                 line += '△'  # Obstacle (bump)
                             elif trous_grid[i, j] > 0.5:
                                 line += '░'  # Trou
                             else:
                                 line += '▓'  # Sol
-                        relative_dist = (i - 8) * 0.1  # Distance relative au robot (8 = 0.8m derrière)
+                        relative_dist = (i - 5) * 0.1  # Distance relative au robot (5 = 0.5m derrière)
                         print(f"    {relative_dist:+.1f}m: {line}")
                     print("    (▓=sol, △=obstacle/bump, ░=trou)")
                     print("    (Grille EGO-CENTRIQUE: tourne avec le robot, 'devant' = toujours vers le haut)")
+                    print("    (VISION ÉLARGIE: 4m de largeur au lieu de 3m pour mieux voir les côtés)")
                 
                 v.sync()
                 time.sleep(0.05)  # 20 FPS
@@ -468,14 +472,16 @@ def train(config_path="config.json", **kwargs):
     # Environnements parallèles avec corridors aléatoires
     envs = gym.vector.AsyncVectorEnv([make_env(config) for _ in range(num_envs)])
     
-    # Environnement de debug pour visualisation
+    # Environnement de debug pour visualisation avec corridor aléatoire EN MÉMOIRE
     if config and 'environment' in config:
         env_config = config['environment']
         debug_max_steps = env_config.get('max_steps', 1000)
-        debug_corridor_xml = env_config.get('corridor_xml', None)
+        use_random = env_config.get('use_random_corridor', True)
+        debug_corridor_xml = None if use_random else "corridor_3x100_no_full_obstacles.xml"
     else:
         debug_max_steps = 1000
-        debug_corridor_xml = None
+        debug_corridor_xml = None  # Génération aléatoire
+        
     debug_env = CorridorEnv(max_steps=debug_max_steps, corridor_xml=debug_corridor_xml)
     
     obs_dim = envs.single_observation_space.shape[0]
@@ -790,7 +796,7 @@ def train(config_path="config.json", **kwargs):
             plot_training_progress(batch_metrics, iteration)
         
         # Debug render
-        if iteration % render_interval == 0:
+        if iteration % render_interval == 0 or iteration == 1:
             debug_render_episode(agent, debug_env, device)
     
     # === FIN ===

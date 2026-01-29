@@ -8,6 +8,61 @@ import argparse
 import mujoco
 from mujoco import viewer
 import time
+import os
+import sys
+
+# Importer le générateur local
+try:
+    from corridor_generator_similar import CorridorGenerator
+except ImportError:
+    print("⚠️  Générateur de corridor non trouvé. Option --random désactivée.")
+    CorridorGenerator = None
+
+def generate_random_corridor(seed=None):
+    """Génère un corridor aléatoire temporaire."""
+    if CorridorGenerator is None:
+        print("❌ Générateur de corridor non disponible!")
+        return None
+    
+    if seed is None:
+        seed = np.random.randint(0, 10000)
+    
+    print(f"🎲 Génération d'un corridor aléatoire (seed={seed})...")
+    
+    generator = CorridorGenerator()
+    temp_filename = f"temp_random_corridor_{seed}.xml"
+    
+    try:
+        # Générer avec des paramètres variés
+        length = np.random.uniform(80.0, 120.0)
+        width = np.random.uniform(2.5, 3.5)
+        
+        generator.save_corridor(temp_filename, length, width, seed)
+        
+        # Statistiques
+        bumps = generator.generate_bump_pattern(length, seed)
+        holes = generator.generate_hole_pattern(length, seed)
+        
+        print(f"✅ Corridor généré: {length:.1f}m × {width:.1f}m")
+        print(f"   {len(bumps)} bumps, {len(holes)} trous")
+        
+        return temp_filename
+        
+    except Exception as e:
+        print(f"❌ Erreur génération: {e}")
+        return None
+
+
+def cleanup_temp_files():
+    """Nettoie les fichiers temporaires."""
+    for file in os.listdir('.'):
+        if file.startswith('temp_random_corridor_') and file.endswith('.xml'):
+            try:
+                os.remove(file)
+                print(f"🗑️  Supprimé: {file}")
+            except:
+                pass
+
 
 def render_corridor_3d(corridor_xml="corridor_3x100_no_full_obstacles.xml", robot_x=None, robot_y=None, robot_angle=None):
     """Ouvre le rendu 3D MuJoCo du corridor avec le robot."""
@@ -185,26 +240,26 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
     
     # Décoder l'observation AVEC HISTORIQUE SIMPLIFIÉ
     robot_state = obs[:7]  # pos(3) + vel(3) + angle(1)
-    history_simplified = obs[7:55].reshape(8, 6)  # 8 frames × 6 valeurs (3 positions + 3 vitesses)
-    grid = obs[55:].reshape(60, 30, 2)  # Grille 60×30×2
+    history_simplified = obs[7:31].reshape(4, 6)  # 4 frames × 6 valeurs (3 positions + 3 vitesses)
+    grid = obs[31:].reshape(57, 40, 2)  # Grille 57×40×2 (2 canaux, plus large)
     
     print("="*100)
     print("ENTRÉE EXACTE DU CNN AVEC HISTORIQUE SIMPLIFIÉ - 2 CANAUX")
     print("="*100)
-    print(f"Observation totale: {obs.shape[0]} valeurs (7 + 48 + {60*30*2} = {7 + 48 + 60*30*2})")
+    print(f"Observation totale: {obs.shape[0]} valeurs (7 + 24 + {57*40*2} = {7 + 24 + 57*40*2})")
     print(f"Robot position: x={robot_state[0]:.3f}m, y={robot_state[1]:.3f}m, z={robot_state[2]:.3f}m")
     print(f"Robot velocity: vx={robot_state[3]:.3f}, vy={robot_state[4]:.3f}, vz={robot_state[5]:.3f}")
     print(f"Robot angle: {np.degrees(robot_angle):.1f}°")
     print()
     
     # Historique simplifié (positions + vitesses, pas de bounding box)
-    print("HISTORIQUE SIMPLIFIÉ (8 frames × 6 valeurs: 3 positions + 3 vitesses relatives):")
-    for i in range(8):
+    print("HISTORIQUE SIMPLIFIÉ (4 frames × 6 valeurs: 3 positions + 3 vitesses relatives):")
+    for i in range(4):
         frame_data = history_simplified[i]  # 6 valeurs
         positions = frame_data[:3]  # 3 premiers = positions
         velocities = frame_data[3:]  # 3 derniers = vitesses
         
-        steps_ago = (7-i) * 10  # 10 steps par position
+        steps_ago = (3-i) * 15  # 15 steps par position (interval réduit)
         if steps_ago == 0:
             print(f"  Actuelle (diff=0):  ", end="")
         else:
@@ -216,11 +271,11 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
         print(f"{pos_str} | {vel_str}")
     print()
     
-    # Grille 60×30×2 - CENTRÉE ET ORIENTÉE selon le robot
-    print("GRILLE 60×30×2 - ENTRÉE DIRECTE DU CNN:")
+    # Grille 57×40×2 - CENTRÉE ET ORIENTÉE selon le robot
+    print("GRILLE 57×40×2 - ENTRÉE DIRECTE DU CNN:")
     print(f"Cellules {env.cell_size}m, vision {env.vision_length}m×{env.vision_width}m")
     print("Vision EGO-CENTRIQUE: grille centrée ET orientée selon le robot")
-    print(f"Robot à ligne {env.robot_row_in_grid} (0.8m derrière), colonne {env.grid_cols//2} (centre)")
+    print(f"Robot à ligne {env.robot_row_in_grid} (0.5m derrière), colonne {env.grid_cols//2} (centre)")
     print(f"La grille TOURNE avec le robot (angle={np.degrees(robot_angle):.1f}°)")
     print("Le robot voit toujours 'devant' vers le haut de la grille")
     print("2 CANAUX BINAIRES: [0]=Obstacles, [1]=Trous")
@@ -229,14 +284,14 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
     # Afficher les 2 canaux séparément d'abord
     print("CANAL 0 - OBSTACLES (bumps + murs latéraux):")
     print("    ", end="")
-    for j in range(0, 30, 3):  # Tous les 3 pour lisibilité
+    for j in range(0, 40, 4):  # Tous les 4 pour lisibilité (40 colonnes)
         print(f"{j:2d}", end=" ")
     print()
-    print("    " + "─" * 30)
+    print("    " + "─" * 40)
     
     for i in range(0, 20):  # 20 premières lignes
         line = f"{i:2d}|"
-        for j in range(30):
+        for j in range(40):  # 40 colonnes
             val = grid[i, j, 0]  # Canal 0
             if val > 0.5:
                 line += '█'  # Obstacle
@@ -248,14 +303,14 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
     print()
     print("CANAL 1 - TROUS (trous + extérieur avant/arrière):")
     print("    ", end="")
-    for j in range(0, 30, 3):
+    for j in range(0, 40, 4):  # Tous les 4 pour lisibilité
         print(f"{j:2d}", end=" ")
     print()
-    print("    " + "─" * 30)
+    print("    " + "─" * 40)
     
     for i in range(0, 20):  # 20 premières lignes
         line = f"{i:2d}|"
-        for j in range(30):
+        for j in range(40):  # 40 colonnes
             val = grid[i, j, 1]  # Canal 1
             if val > 0.5:
                 line += '░'  # Trou
@@ -267,16 +322,16 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
     print()
     print("GRILLE COMBINÉE (ce que voit le robot):")
     print("    ", end="")
-    for j in range(0, 30):  # TOUTES les colonnes 0-29
+    for j in range(0, 40):  # TOUTES les colonnes 0-39
         print(f"{j%10}", end="")
     print()
-    print("    " + "─" * 30)
+    print("    " + "─" * 40)
     
     # Afficher grille combinée (combinaison des 2 canaux)
-    for i in range(0, 30):  # Lignes 0-29 (robot à ligne 8)
+    for i in range(0, 40):  # Lignes 0-39 (robot à ligne 5)
         line = f"{i:3d}|"
         
-        for j in range(0, 30):  # TOUTES les colonnes 0-29
+        for j in range(0, 40):  # TOUTES les colonnes 0-39
             # Extraire les 2 canaux
             obstacle = grid[i, j, 0]
             trou = grid[i, j, 1]
@@ -331,8 +386,8 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
     print()
     print("STRUCTURE OBSERVATION POUR CNN:")
     print(f"  1. Robot state:      7 valeurs {robot_state}")
-    print(f"  2. History simplifié: 48 valeurs (8 frames × 6: 3 positions + 3 vitesses)")
-    print(f"  3. Grille 2 canaux:  {grid.size} valeurs (60×30×2)")
+    print(f"  2. History simplifié: 24 valeurs (4 frames × 6: 3 positions + 3 vitesses)")
+    print(f"  3. Grille 2 canaux:  {grid.size} valeurs (57×40×2)")
     print(f"  TOTAL:              {obs.shape[0]} valeurs → CNN avec 2 canaux d'entrée")
     print("="*100)
     
@@ -357,6 +412,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualise l'entrée exacte du CNN avec 2 canaux")
     parser.add_argument("--corridor", type=str, default="corridor_3x100_no_full_obstacles.xml", 
                        help="Fichier XML du corridor (défaut: corridor_3x100_no_full_obstacles.xml)")
+    parser.add_argument("--random", action="store_true",
+                       help="Génère et utilise un corridor aléatoire au lieu du corridor fixe")
+    parser.add_argument("--seed", type=int, help="Seed pour la génération aléatoire (défaut: aléatoire)")
     parser.add_argument("--x", type=float, help="Position X du robot (défaut: aléatoire)")
     parser.add_argument("--y", type=float, help="Position Y du robot (défaut: aléatoire)")
     parser.add_argument("--angle", type=float, help="Angle du robot en DEGRÉS (défaut: aléatoire)")
@@ -368,25 +426,47 @@ if __name__ == "__main__":
                        help="Ouvre le rendu 3D MuJoCo du corridor")
     args = parser.parse_args()
     
-    if args.render:
-        # Convertir angle de degrés en radians si fourni
-        angle_rad = np.radians(args.angle) if args.angle is not None else None
-        
-        # D'ABORD afficher les grilles 2D
-        print("📊 VISUALISATION 2D DES GRILLES CNN:")
-        print("=" * 50)
-        visualize_cnn_input(args.corridor, args.x, args.y, angle_rad)
-        
-        # PUIS ouvrir le rendu 3D
-        print("\n" + "=" * 50)
-        print("🎬 OUVERTURE DU RENDU 3D...")
-        input("Appuyez sur Entrée pour ouvrir le rendu 3D...")
-        render_corridor_3d(args.corridor, args.x, args.y, angle_rad)
-    elif args.test_multiple:
-        test_multiple_positions(args.corridor)
-    elif args.full_map:
-        visualize_full_corridor(args.corridor)
-    else:
-        # Convertir angle de degrés en radians si fourni
-        angle_rad = np.radians(args.angle) if args.angle is not None else None
-        visualize_cnn_input(args.corridor, args.x, args.y, angle_rad)
+    # Déterminer le corridor à utiliser
+    corridor_xml = args.corridor
+    temp_file = None
+    
+    # Si --random OU --seed est fourni, générer un corridor
+    if args.random or args.seed is not None:
+        temp_file = generate_random_corridor(args.seed)
+        if temp_file:
+            corridor_xml = temp_file
+        else:
+            print("⚠️  Utilisation du corridor par défaut à la place")
+    
+    try:
+        if args.render:
+            # Convertir angle de degrés en radians si fourni
+            angle_rad = np.radians(args.angle) if args.angle is not None else None
+            
+            # D'ABORD afficher les grilles 2D
+            print("📊 VISUALISATION 2D DES GRILLES CNN:")
+            print("=" * 50)
+            visualize_cnn_input(corridor_xml, args.x, args.y, angle_rad)
+            
+            # PUIS ouvrir le rendu 3D
+            print("\n" + "=" * 50)
+            print("🎬 OUVERTURE DU RENDU 3D...")
+            input("Appuyez sur Entrée pour ouvrir le rendu 3D...")
+            render_corridor_3d(corridor_xml, args.x, args.y, angle_rad)
+        elif args.test_multiple:
+            test_multiple_positions(corridor_xml)
+        elif args.full_map:
+            visualize_full_corridor(corridor_xml)
+        else:
+            # Convertir angle de degrés en radians si fourni
+            angle_rad = np.radians(args.angle) if args.angle is not None else None
+            visualize_cnn_input(corridor_xml, args.x, args.y, angle_rad)
+    
+    finally:
+        # Nettoyer les fichiers temporaires
+        if temp_file and os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+                print(f"🗑️  Fichier temporaire supprimé: {temp_file}")
+            except:
+                pass

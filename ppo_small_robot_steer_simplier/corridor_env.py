@@ -123,9 +123,15 @@ class CorridorEnv(gym.Env):
         self.use_random_corridor = corridor_xml is None
         
         if self.use_random_corridor:
-            # Générer premier corridor aléatoire
-            self.current_grid = generate_corridor_grid()
-            self.model = self._build_model_from_grid(self.current_grid)
+            # Générer premier corridor aléatoire avec le NOUVEAU système
+            try:
+                from corridor_generator_similar import CorridorGenerator
+                self.corridor_generator = CorridorGenerator()
+                self.model = self._build_model_from_new_generator()
+            except ImportError:
+                print("⚠️  Nouveau générateur non disponible, utilisation de l'ancien système")
+                self.current_grid = generate_corridor_grid()
+                self.model = self._build_model_from_grid(self.current_grid)
         else:
             # Utiliser corridor XML fixe
             self.model = self._build_model_from_xml(corridor_xml)
@@ -138,14 +144,14 @@ class CorridorEnv(gym.Env):
         self.corridor_width = 3.0
         self.cell_size = 0.1  # 10cm par cellule (plus gros = plus facile à apprendre)
         
-        # Grille vision: 5.2m devant + 0.8m derrière = 6m × 3m largeur
-        self.vision_behind = 0.8  # 0.8m derrière (8 cellules) - assez pour voir coins arrière même inclinés
+        # Grille vision: 5.2m devant + 0.5m derrière = 5.7m × 4m largeur
+        self.vision_behind = 0.5  # 0.5m derrière (5 cellules) - réduit
         self.vision_front = 5.2   # 5.2m devant (52 cellules)
-        self.vision_length = self.vision_behind + self.vision_front  # 6m total
-        self.vision_width = 3.0   # 3m largeur (exactement la largeur du couloir)
-        self.grid_rows = int(self.vision_length / self.cell_size)  # 60 lignes
-        self.grid_cols = int(self.vision_width / self.cell_size)   # 30 colonnes
-        self.robot_row_in_grid = round(self.vision_behind / self.cell_size)  # 8 (0.8m derrière)
+        self.vision_length = self.vision_behind + self.vision_front  # 5.7m total
+        self.vision_width = 4.0   # 4m largeur (plus large pour mieux voir les côtés)
+        self.grid_rows = int(self.vision_length / self.cell_size)  # 57 lignes
+        self.grid_cols = int(self.vision_width / self.cell_size)   # 40 colonnes
+        self.robot_row_in_grid = round(self.vision_behind / self.cell_size)  # 5 (0.5m derrière)
         
         # Dimensions robot (bounding box) - ROBOT PLUS PETIT
         self.robot_length = 0.80  # 8 cellules (empattement 0.5m + diamètre roues 0.3m = 0.8m)
@@ -158,9 +164,9 @@ class CorridorEnv(gym.Env):
         self.max_steering_angle = 30.0  # Angle de volant max (degrés)
         self.max_speed = 1.0          # Vitesse max réduite pour meilleur contrôle
         
-        # Historique des positions pour anticipation (AVANT les espaces)
-        self.history_interval = 10  # Sauvegarder position tous les 10 steps (plus fréquent)
-        self.history_length = 8     # Garder les 8 dernières positions (plus d'historique)
+        # Historique des positions pour anticipation RÉDUIT
+        self.history_interval = 15  # Sauvegarder position tous les 15 steps (moins fréquent)
+        self.history_length = 4     # Garder seulement les 4 dernières positions (réduit)
         self.position_history = []  # Buffer des positions + vitesses
         
         # Période de stabilisation
@@ -170,10 +176,10 @@ class CorridorEnv(gym.Env):
         self.cell_map = self._build_cell_map()
         
         # Espaces - CNN 2 canaux + historique simplifié (sans bounding box)
-        # Historique: 8 positions × (3 coords + 3 vitesses) = 8 × 6 = 48 valeurs
+        # Historique: 4 positions × (3 coords + 3 vitesses) = 4 × 6 = 24 valeurs (RÉDUIT)
         history_size = self.history_length * 6  # positions (3) + vitesses (3) par frame
-        grid_size = self.grid_rows * self.grid_cols * 2  # 60×30×2 = 3600 (2 canaux)
-        obs_size = 7 + history_size + grid_size  # 7 + 48 + 3600 = 3655 (sans bounding box)
+        grid_size = self.grid_rows * self.grid_cols * 2  # 57×40×2 = 4560 (2 canaux, grille plus large)
+        obs_size = 7 + history_size + grid_size  # 7 + 24 + 4560 = 4591 (grille élargie)
         self.observation_space = spaces.Box(-np.inf, np.inf, (obs_size,), np.float32)
         # CONTRÔLE PAR VOLANT : 2 actions au lieu de 4
         # action[0] = steering_angle (±1.0 → ±30°)
@@ -191,11 +197,18 @@ class CorridorEnv(gym.Env):
         super().reset(seed=seed)
         
         if self.use_random_corridor:
-            # Générer un nouveau corridor aléatoire à chaque reset
-            self.current_grid = generate_corridor_grid()
-            self.model = self._build_model_from_grid(self.current_grid)
-            self.data = mujoco.MjData(self.model)
-            self.cell_map = grid_to_cell_map(self.current_grid, self.cell_size)
+            # Générer un nouveau corridor aléatoire à chaque reset avec le NOUVEAU système
+            if hasattr(self, 'corridor_generator'):
+                # Utiliser le nouveau générateur
+                self.model = self._build_model_from_new_generator()
+                self.data = mujoco.MjData(self.model)
+                self.cell_map = self._build_cell_map_from_xml()
+            else:
+                # Fallback ancien système
+                self.current_grid = generate_corridor_grid()
+                self.model = self._build_model_from_grid(self.current_grid)
+                self.data = mujoco.MjData(self.model)
+                self.cell_map = grid_to_cell_map(self.current_grid, self.cell_size)
             
             # Mettre à jour robot_body_id pour le nouveau modèle
             self.robot_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'robot')
@@ -494,10 +507,10 @@ class CorridorEnv(gym.Env):
             info['reason'] = 'collision'
             return -10.0, True, info
         
-        # Récompense SIMPLE: progression uniquement
+        # Récompense SIMPLE: progression réduite
         delta_x = x - self.prev_x
         self.prev_x = x
-        reward = delta_x * 10.0  # Récompense pour avancer
+        reward = delta_x * 2.0  # Récompense réduite de 10 à 2 par mètre
         
         info['reason'] = None
         return reward, terminated, info
@@ -539,10 +552,100 @@ class CorridorEnv(gym.Env):
     def _build_cell_map(self):
         """Construire carte initiale."""
         if self.use_random_corridor:
-            return grid_to_cell_map(self.current_grid, self.cell_size)
+            if hasattr(self, 'corridor_generator'):
+                # Nouveau système: construire depuis le modèle XML
+                return self._build_cell_map_from_xml()
+            else:
+                # Ancien système: utiliser la grille
+                return grid_to_cell_map(self.current_grid, self.cell_size)
         else:
             return self._build_cell_map_from_xml()
 
+    def _build_model_from_new_generator(self):
+        """Construire modèle MuJoCo avec robot + corridor généré par le nouveau système."""
+        import numpy as np
+        
+        # Générer corridor avec paramètres aléatoires
+        seed = np.random.randint(0, 10000)
+        length = np.random.uniform(80.0, 120.0)
+        width = np.random.uniform(2.5, 3.5)
+        
+        # Générer XML en mémoire (pas de sauvegarde fichier)
+        corridor_xml_str = self.corridor_generator.generate_corridor_xml(length, width, seed, "random_corridor")
+        corridor_root = ET.fromstring(corridor_xml_str)
+        
+        # Charger robot
+        robot_tree = ET.parse(self.robot_xml)
+        robot_root = robot_tree.getroot()
+        
+        root = ET.Element('mujoco')
+        root.set('model', 'robot_in_corridor')
+        
+        # Compiler
+        for child in robot_root:
+            if child.tag == 'compiler':
+                root.append(child)
+                break
+        
+        # Options
+        option = ET.SubElement(root, 'option')
+        option.set('timestep', '0.005')
+        option.set('gravity', '0 0 -9.81')
+        
+        # Size
+        size = ET.SubElement(root, 'size')
+        size.set('njmax', '4000')
+        size.set('nconmax', '1000')
+        
+        # Default
+        for child in robot_root:
+            if child.tag == 'default':
+                root.append(child)
+                break
+        
+        # Visual
+        for child in robot_root:
+            if child.tag == 'visual':
+                root.append(child)
+                break
+        
+        # Assets (combiner robot + corridor)
+        asset = ET.SubElement(root, 'asset')
+        added = set()
+        for src in [robot_root, corridor_root]:
+            asset_elem = src.find('asset')
+            if asset_elem is not None:
+                for mat in asset_elem:
+                    name = mat.get('name', '')
+                    if name not in added:
+                        asset.append(mat)
+                        added.add(name)
+        
+        # Worldbody
+        worldbody = ET.SubElement(root, 'worldbody')
+        
+        # Corridor (géométries générées)
+        corridor_wb = corridor_root.find('worldbody')
+        if corridor_wb is not None:
+            for elem in corridor_wb:
+                worldbody.append(elem)
+        
+        # Robot
+        robot_wb = robot_root.find('worldbody')
+        if robot_wb is not None:
+            for body in robot_wb:
+                if body.get('name') == 'robot':
+                    body.set('pos', '0.75 0 0.30')  # Hauteur corrigée
+                    worldbody.append(body)
+        
+        # Actuateurs
+        robot_act = robot_root.find('actuator')
+        if robot_act is not None:
+            root.append(robot_act)
+        
+        xml_str = ET.tostring(root, encoding='unicode')
+        return mujoco.MjModel.from_xml_string(xml_str)
+    
     def _build_model_from_grid(self, grid):
         """Construire modèle MuJoCo avec robot + corridor généré."""
         # Générer XML du corridor
