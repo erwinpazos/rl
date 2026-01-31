@@ -236,12 +236,14 @@ def make_env(config=None):
             env_config = config['environment']
             max_steps = env_config.get('max_steps', 1000)
             use_random = env_config.get('use_random_corridor', True)
+            corridor_xml_file = env_config.get('corridor_xml', 'corridor_3x100_no_full_obstacles.xml')
         else:
             max_steps = 1000
             use_random = True
+            corridor_xml_file = 'corridor_3x100_no_full_obstacles.xml'
         
         # Utiliser corridor_xml=None pour générer aléatoirement EN MÉMOIRE
-        corridor_xml = None if use_random else "corridor_3x100_no_full_obstacles.xml"
+        corridor_xml = None if use_random else corridor_xml_file
             
         env = CorridorEnv(max_steps=max_steps, corridor_xml=corridor_xml)
         env = gym.wrappers.RecordEpisodeStatistics(env)
@@ -477,7 +479,8 @@ def train(config_path="config.json", **kwargs):
         env_config = config['environment']
         debug_max_steps = env_config.get('max_steps', 1000)
         use_random = env_config.get('use_random_corridor', True)
-        debug_corridor_xml = None if use_random else "corridor_3x100_no_full_obstacles.xml"
+        corridor_xml_file = env_config.get('corridor_xml', 'corridor_3x100_no_full_obstacles.xml')
+        debug_corridor_xml = None if use_random else corridor_xml_file
     else:
         debug_max_steps = 1000
         debug_corridor_xml = None  # Génération aléatoire

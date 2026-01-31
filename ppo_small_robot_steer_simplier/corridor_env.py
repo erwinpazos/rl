@@ -8,7 +8,6 @@ import gymnasium as gym
 from gymnasium import spaces
 import mujoco
 import xml.etree.ElementTree as ET
-from corridor_generator import generate_corridor_grid, grid_to_cell_map, grid_to_xml_string
 
 
 def clip_steering_angle(angle, max_angle=30.0):
@@ -123,15 +122,10 @@ class CorridorEnv(gym.Env):
         self.use_random_corridor = corridor_xml is None
         
         if self.use_random_corridor:
-            # Générer premier corridor aléatoire avec le NOUVEAU système
-            try:
-                from corridor_generator_similar import CorridorGenerator
-                self.corridor_generator = CorridorGenerator()
-                self.model = self._build_model_from_new_generator()
-            except ImportError:
-                print("⚠️  Nouveau générateur non disponible, utilisation de l'ancien système")
-                self.current_grid = generate_corridor_grid()
-                self.model = self._build_model_from_grid(self.current_grid)
+            # Générer premier corridor aléatoire avec le nouveau système
+            from corridor_generator_similar import CorridorGenerator
+            self.corridor_generator = CorridorGenerator()
+            self.model = self._build_model_from_new_generator()
         else:
             # Utiliser corridor XML fixe
             self.model = self._build_model_from_xml(corridor_xml)
@@ -203,12 +197,6 @@ class CorridorEnv(gym.Env):
                 self.model = self._build_model_from_new_generator()
                 self.data = mujoco.MjData(self.model)
                 self.cell_map = self._build_cell_map_from_xml()
-            else:
-                # Fallback ancien système
-                self.current_grid = generate_corridor_grid()
-                self.model = self._build_model_from_grid(self.current_grid)
-                self.data = mujoco.MjData(self.model)
-                self.cell_map = grid_to_cell_map(self.current_grid, self.cell_size)
             
             # Mettre à jour robot_body_id pour le nouveau modèle
             self.robot_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'robot')
@@ -555,9 +543,6 @@ class CorridorEnv(gym.Env):
             if hasattr(self, 'corridor_generator'):
                 # Nouveau système: construire depuis le modèle XML
                 return self._build_cell_map_from_xml()
-            else:
-                # Ancien système: utiliser la grille
-                return grid_to_cell_map(self.current_grid, self.cell_size)
         else:
             return self._build_cell_map_from_xml()
 
@@ -572,84 +557,6 @@ class CorridorEnv(gym.Env):
         
         # Générer XML en mémoire (pas de sauvegarde fichier)
         corridor_xml_str = self.corridor_generator.generate_corridor_xml(length, width, seed, "random_corridor")
-        corridor_root = ET.fromstring(corridor_xml_str)
-        
-        # Charger robot
-        robot_tree = ET.parse(self.robot_xml)
-        robot_root = robot_tree.getroot()
-        
-        root = ET.Element('mujoco')
-        root.set('model', 'robot_in_corridor')
-        
-        # Compiler
-        for child in robot_root:
-            if child.tag == 'compiler':
-                root.append(child)
-                break
-        
-        # Options
-        option = ET.SubElement(root, 'option')
-        option.set('timestep', '0.005')
-        option.set('gravity', '0 0 -9.81')
-        
-        # Size
-        size = ET.SubElement(root, 'size')
-        size.set('njmax', '4000')
-        size.set('nconmax', '1000')
-        
-        # Default
-        for child in robot_root:
-            if child.tag == 'default':
-                root.append(child)
-                break
-        
-        # Visual
-        for child in robot_root:
-            if child.tag == 'visual':
-                root.append(child)
-                break
-        
-        # Assets (combiner robot + corridor)
-        asset = ET.SubElement(root, 'asset')
-        added = set()
-        for src in [robot_root, corridor_root]:
-            asset_elem = src.find('asset')
-            if asset_elem is not None:
-                for mat in asset_elem:
-                    name = mat.get('name', '')
-                    if name not in added:
-                        asset.append(mat)
-                        added.add(name)
-        
-        # Worldbody
-        worldbody = ET.SubElement(root, 'worldbody')
-        
-        # Corridor (géométries générées)
-        corridor_wb = corridor_root.find('worldbody')
-        if corridor_wb is not None:
-            for elem in corridor_wb:
-                worldbody.append(elem)
-        
-        # Robot
-        robot_wb = robot_root.find('worldbody')
-        if robot_wb is not None:
-            for body in robot_wb:
-                if body.get('name') == 'robot':
-                    body.set('pos', '0.75 0 0.30')  # Hauteur corrigée
-                    worldbody.append(body)
-        
-        # Actuateurs
-        robot_act = robot_root.find('actuator')
-        if robot_act is not None:
-            root.append(robot_act)
-        
-        xml_str = ET.tostring(root, encoding='unicode')
-        return mujoco.MjModel.from_xml_string(xml_str)
-    
-    def _build_model_from_grid(self, grid):
-        """Construire modèle MuJoCo avec robot + corridor généré."""
-        # Générer XML du corridor
-        corridor_xml_str = grid_to_xml_string(grid)
         corridor_root = ET.fromstring(corridor_xml_str)
         
         # Charger robot

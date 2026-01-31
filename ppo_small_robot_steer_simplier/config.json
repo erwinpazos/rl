@@ -21,7 +21,8 @@
   },
   "environment": {
     "max_steps": 3000,
-    "use_random_corridor": true
+    "use_random_corridor": false,
+    "corridor_xml": "corridor_3x100_no_full_obstacles.xml"
   },
   "network": {
     "robot_state_dim": 7,
