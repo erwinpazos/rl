@@ -339,11 +339,11 @@ def main():
                     reason = info.get('reason', 'unknown')
                     final_x = env.data.qpos[0]
                     
-                    print(f"\n🏁 ÉPISODE TERMINÉ: {reason}")
-                    print(f"   Distance parcourue: {final_x:.2f}m")
+                    print(f"\nEPISODE ENDED: {reason}")
+                    print(f"   Distance: {final_x:.2f}m")
                     print(f"   Steps: {step_count}")
-                    print(f"   Reward total: {total_reward:.1f}")
-                    print("   Tapez 'r' pour recommencer ou 'q' pour quitter")
+                    print(f"   Total reward: {total_reward:.1f}")
+                    print("   Press 'r' to restart or 'q' to quit")
                     
                     # Attendre une action de l'utilisateur
                     while v.is_running() and not reset_requested and not quit_requested:

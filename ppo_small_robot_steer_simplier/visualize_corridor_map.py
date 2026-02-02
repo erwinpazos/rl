@@ -1,6 +1,6 @@
 """
 Visualisation EXACTE de ce que le CNN reçoit en entrée.
-Grille 60×30×2 avec 2 canaux binaires, robot intégré dans la grille.
+Grille dynamique×2 avec 2 canaux binaires, robot intégré dans la grille.
 """
 from corridor_env import CorridorEnv
 import numpy as np
@@ -155,7 +155,7 @@ def visualize_full_corridor(corridor_xml="corridor_100.xml"):
     print(f"Total length: {(max_row+1) * env.cell_size}m")
     print(f"Total width: {(max_col+1) * env.cell_size}m")
     print()
-    print("Legend: ▓ = flat (0)  △ = bump (1)  ░ = hole (2)")
+    print("Legend: # = flat (0)  ^ = bump (1)  . = hole (2)")
     print("="*80)
     print()
     
@@ -181,11 +181,11 @@ def visualize_full_corridor(corridor_xml="corridor_100.xml"):
                 display_type = 2
                 
             if display_type == 0:
-                line += "▓"
+                line += "#"
             elif display_type == 1:
-                line += "△"
+                line += "^"
             elif display_type == 2:
-                line += "░"
+                line += "."
             else:
                 line += "?"
         print(line)
@@ -240,13 +240,13 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
     
     # Décoder l'observation AVEC HISTORIQUE SIMPLIFIÉ
     robot_state = obs[:7]  # pos(3) + vel(3) + angle(1)
-    history_simplified = obs[7:31].reshape(4, 6)  # 4 frames × 6 valeurs (3 positions + 3 vitesses)
-    grid = obs[31:].reshape(57, 40, 2)  # Grille 57×40×2 (2 canaux, plus large)
+    history_simplified = obs[7:7+env.history_dim].reshape(env.history_length, 6)  # history_length frames × 6 valeurs
+    grid = obs[7+env.history_dim:].reshape(env.grid_rows, env.grid_cols, 2)  # Grille dynamique×2
     
     print("="*100)
     print("ENTRÉE EXACTE DU CNN AVEC HISTORIQUE SIMPLIFIÉ - 2 CANAUX")
     print("="*100)
-    print(f"Observation totale: {obs.shape[0]} valeurs (7 + 24 + {57*40*2} = {7 + 24 + 57*40*2})")
+    print(f"Observation totale: {obs.shape[0]} valeurs (7 + {env.history_dim} + {env.grid_dim} = {7 + env.history_dim + env.grid_dim})")
     print(f"Robot position: x={robot_state[0]:.3f}m, y={robot_state[1]:.3f}m, z={robot_state[2]:.3f}m")
     print(f"Robot velocity: vx={robot_state[3]:.3f}, vy={robot_state[4]:.3f}, vz={robot_state[5]:.3f}")
     print(f"Robot angle: {np.degrees(robot_angle):.1f}°")
@@ -271,11 +271,11 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
         print(f"{pos_str} | {vel_str}")
     print()
     
-    # Grille 57×40×2 - CENTRÉE ET ORIENTÉE selon le robot
-    print("GRILLE 57×40×2 - ENTRÉE DIRECTE DU CNN:")
+    # Grille dynamique×2 - CENTRÉE ET ORIENTÉE selon le robot
+    print(f"GRILLE {env.grid_rows}×{env.grid_cols}×2 - ENTRÉE DIRECTE DU CNN:")
     print(f"Cellules {env.cell_size}m, vision {env.vision_length}m×{env.vision_width}m")
     print("Vision EGO-CENTRIQUE: grille centrée ET orientée selon le robot")
-    print(f"Robot à ligne {env.robot_row_in_grid} (0.5m derrière), colonne {env.grid_cols//2} (centre)")
+    print(f"Robot à ligne {env.robot_row_in_grid} ({env.vision_behind}m derrière), colonne {env.robot_col_in_grid} (centre)")
     print(f"La grille TOURNE avec le robot (angle={np.degrees(robot_angle):.1f}°)")
     print("Le robot voit toujours 'devant' vers le haut de la grille")
     print("2 CANAUX BINAIRES: [0]=Obstacles, [1]=Trous")
@@ -284,71 +284,73 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
     # Afficher les 2 canaux séparément d'abord
     print("CANAL 0 - OBSTACLES (bumps + murs latéraux):")
     print("    ", end="")
-    for j in range(0, 40, 4):  # Tous les 4 pour lisibilité (40 colonnes)
+    for j in range(0, env.grid_cols, max(1, env.grid_cols//10)):  # Échantillonner pour lisibilité
         print(f"{j:2d}", end=" ")
     print()
-    print("    " + "─" * 40)
+    print("    " + "─" * min(env.grid_cols, 50))  # Limiter la largeur d'affichage
     
-    for i in range(0, 20):  # 20 premières lignes
+    for i in range(0, min(20, env.grid_rows)):  # Premières lignes
         line = f"{i:2d}|"
-        for j in range(40):  # 40 colonnes
+        for j in range(min(env.grid_cols, 50)):  # Limiter colonnes affichées
             val = grid[i, j, 0]  # Canal 0
             if val > 0.5:
-                line += '█'  # Obstacle
+                line += '#'  # Obstacle
             else:
-                line += '·'  # Libre
+                line += '.'  # Free
         relative_dist = (i - env.robot_row_in_grid) * env.cell_size
         print(f"{line} {relative_dist:+.1f}m")
     
     print()
     print("CANAL 1 - TROUS (trous + extérieur avant/arrière):")
     print("    ", end="")
-    for j in range(0, 40, 4):  # Tous les 4 pour lisibilité
+    for j in range(0, env.grid_cols, max(1, env.grid_cols//10)):  # Échantillonner pour lisibilité
         print(f"{j:2d}", end=" ")
     print()
-    print("    " + "─" * 40)
+    print("    " + "─" * min(env.grid_cols, 50))
     
-    for i in range(0, 20):  # 20 premières lignes
+    for i in range(0, min(20, env.grid_rows)):  # Premières lignes
         line = f"{i:2d}|"
-        for j in range(40):  # 40 colonnes
+        for j in range(min(env.grid_cols, 50)):  # Limiter colonnes affichées
             val = grid[i, j, 1]  # Canal 1
             if val > 0.5:
-                line += '░'  # Trou
+                line += '.'  # Hole
             else:
-                line += '·'  # Libre
+                line += ' '  # Free
         relative_dist = (i - env.robot_row_in_grid) * env.cell_size
         print(f"{line} {relative_dist:+.1f}m")
     
     print()
     print("GRILLE COMBINÉE (ce que voit le robot):")
     print("    ", end="")
-    for j in range(0, 40):  # TOUTES les colonnes 0-39
+    display_cols = min(env.grid_cols, 50)  # Limiter l'affichage
+    for j in range(0, display_cols):
         print(f"{j%10}", end="")
     print()
-    print("    " + "─" * 40)
+    print("    " + "─" * display_cols)
     
     # Afficher grille combinée (combinaison des 2 canaux)
-    for i in range(0, 40):  # Lignes 0-39 (robot à ligne 5)
+    display_rows = min(env.grid_rows, 40)  # Limiter l'affichage
+    for i in range(0, display_rows):
         line = f"{i:3d}|"
         
-        for j in range(0, 40):  # TOUTES les colonnes 0-39
+        for j in range(0, display_cols):
             # Extraire les 2 canaux
             obstacle = grid[i, j, 0]
             trou = grid[i, j, 1]
             
-            # Marquer la position du robot
-            if i == env.robot_row_in_grid and j == env.grid_cols // 2:
-                symbol = '🤖'  # Robot au centre
+            # Mark robot position
+            if i == env.robot_row_in_grid and j == env.robot_col_in_grid:
+                symbol = 'R'  # Robot at center
             else:
-                # Symboles selon les 2 canaux binaires
+                # Symbols based on 2 binary channels
                 if obstacle > 0.5 and trou > 0.5:
-                    symbol = '?'  # Erreur (ne devrait pas arriver)
+                    symbol = '?'  # Error (should not happen)
                 elif obstacle > 0.5:
-                    symbol = '█'  # Obstacle (bump ou mur latéral)
+                    symbol = '#'  # Obstacle (bump or side wall)
                 elif trou > 0.5:
-                    symbol = '░'  # Trou (trou ou extérieur avant/arrière)
+                    symbol = '.'  # Hole (hole or exterior front/back)
                 else:
-                    symbol = '▓'  # Sol navigable
+                    symbol = ' '  # Navigable floor
             
             line += symbol
         
@@ -357,14 +359,14 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
         print(f"{line} {relative_dist:+.2f}m")
     
     print()
-    print("LÉGENDE:")
-    print("  █ = obstacle (bump OU mur latéral)    ▓ = sol navigable    ░ = trou (trou OU extérieur)")
-    print("  🤖 = robot (toujours au centre de la grille ego-centrique)")
-    print(f"  Vision: {env.grid_rows}×{env.grid_cols}×2 cellules de {env.cell_size}m")
-    print(f"  Couvre: {env.vision_length}m devant/derrière × {env.vision_width}m largeur")
-    print(f"  Vision EGO-CENTRIQUE: grille tourne avec le robot (angle={np.degrees(robot_angle):.1f}°)")
-    print(f"  Robot toujours au centre (ligne {env.robot_row_in_grid}, col {env.grid_cols//2})")
-    print(f"  'Devant' = toujours vers le haut de la grille, quelle que soit l'orientation réelle")
+    print("LEGEND:")
+    print("  # = obstacle (bump OR side wall)    [space] = navigable floor    . = hole (hole OR exterior)")
+    print("  R = robot (always at center of ego-centric grid)")
+    print(f"  Vision: {env.grid_rows}x{env.grid_cols}x2 cells of {env.cell_size}m")
+    print(f"  Covers: {env.vision_length}m front/back x {env.vision_width}m width")
+    print(f"  EGO-CENTRIC vision: grid rotates with robot (angle={np.degrees(robot_angle):.1f} deg)")
+    print(f"  Robot always at center (row {env.robot_row_in_grid}, col {env.robot_col_in_grid})")
+    print(f"  'Forward' = always toward top of grid, regardless of actual orientation")
     print()
     
     # Statistiques des 2 canaux
@@ -373,21 +375,21 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
     
     # Canal 0: Obstacles
     obstacle_count = np.sum(grid[:, :, 0] > 0.5)
-    print(f"  Canal 0 (Obstacles): {obstacle_count:5d} cellules ({100*obstacle_count/total_cells:5.1f}%)  [█]")
+    print(f"  Channel 0 (Obstacles): {obstacle_count:5d} cells ({100*obstacle_count/total_cells:5.1f}%)  [#]")
     
     # Canal 1: Trous
     trou_count = np.sum(grid[:, :, 1] > 0.5)
-    print(f"  Canal 1 (Trous):     {trou_count:5d} cellules ({100*trou_count/total_cells:5.1f}%)  [░]")
+    print(f"  Channel 1 (Holes):     {trou_count:5d} cells ({100*trou_count/total_cells:5.1f}%)  [.]")
     
     # Sol navigable (les deux à 0)
     sol_count = np.sum((grid[:, :, 0] <= 0.5) & (grid[:, :, 1] <= 0.5))
-    print(f"  Sol navigable:       {sol_count:5d} cellules ({100*sol_count/total_cells:5.1f}%)  [▓]")
+    print(f"  Navigable floor:       {sol_count:5d} cells ({100*sol_count/total_cells:5.1f}%)  [space]")
     
     print()
     print("STRUCTURE OBSERVATION POUR CNN:")
     print(f"  1. Robot state:      7 valeurs {robot_state}")
-    print(f"  2. History simplifié: 24 valeurs (4 frames × 6: 3 positions + 3 vitesses)")
-    print(f"  3. Grille 2 canaux:  {grid.size} valeurs (57×40×2)")
+    print(f"  2. History simplifié: {env.history_dim} valeurs ({env.history_length} frames × 6: 3 positions + 3 vitesses)")
+    print(f"  3. Grille 2 canaux:  {grid.size} valeurs ({env.grid_rows}×{env.grid_cols}×2)")
     print(f"  TOTAL:              {obs.shape[0]} valeurs → CNN avec 2 canaux d'entrée")
     print("="*100)
     

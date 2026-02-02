@@ -132,35 +132,166 @@ class CorridorEnv(gym.Env):
         
         self.data = mujoco.MjData(self.model)
         
-        # Paramètres SIMPLIFIÉS
+        # Paramètres de base
         self.max_steps = max_steps
         self.corridor_length = 100.0
         self.corridor_width = 3.0
-        self.cell_size = 0.1  # 10cm par cellule (plus gros = plus facile à apprendre)
         
-        # Grille vision: 5.2m devant + 0.5m derrière = 5.7m × 4m largeur
-        self.vision_behind = 0.5  # 0.5m derrière (5 cellules) - réduit
-        self.vision_front = 5.2   # 5.2m devant (52 cellules)
-        self.vision_length = self.vision_behind + self.vision_front  # 5.7m total
-        self.vision_width = 4.0   # 4m largeur (plus large pour mieux voir les côtés)
-        self.grid_rows = int(self.vision_length / self.cell_size)  # 57 lignes
-        self.grid_cols = int(self.vision_width / self.cell_size)   # 40 colonnes
-        self.robot_row_in_grid = round(self.vision_behind / self.cell_size)  # 5 (0.5m derrière)
+        # Paramètres de vision (par défaut si pas de config)
+        self.cell_size = 0.1
+        self.vision_front = 5.2
+        self.vision_behind = 0.5
+        self.vision_left = 1.5
+        self.vision_right = 1.5
+        self.history_length = 4
+        self.history_interval = 15
         
-        # Dimensions robot (bounding box) - ROBOT PLUS PETIT
-        self.robot_length = 0.80  # 8 cellules (empattement 0.5m + diamètre roues 0.3m = 0.8m)
-        self.robot_width = 0.46   # 5 cellules (voie 0.4m + largeur roues 0.06m = 0.46m)
+        # Calculer dimensions dynamiquement
+        self.load_config_if_available()
+        self._calculate_vision_dimensions()
         
-        # Paramètres contrôle par volant
-        self.wheelbase_length = 0.5   # Distance entre essieux avant/arrière (m)
-        self.track_width = 0.4        # Distance entre roues gauche/droite (m)
-        self.wheel_radius = 0.15      # Rayon des roues (m)
-        self.max_steering_angle = 30.0  # Angle de volant max (degrés)
-        self.max_speed = 1.0          # Vitesse max réduite pour meilleur contrôle
+    def load_config_if_available(self):
+        """Charge la configuration depuis config.yaml si disponible."""
+        import yaml
+        import os
         
-        # Historique des positions pour anticipation RÉDUIT
-        self.history_interval = 15  # Sauvegarder position tous les 15 steps (moins fréquent)
-        self.history_length = 4     # Garder seulement les 4 dernières positions (réduit)
+        config_path = "config.yaml"
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                
+                # Charger paramètres de vision
+                if 'vision' in config:
+                    vision_config = config['vision']
+                    self.cell_size = vision_config.get('cell_size', self.cell_size)
+                    self.vision_front = vision_config.get('vision_front', self.vision_front)
+                    self.vision_behind = vision_config.get('vision_behind', self.vision_behind)
+                    self.vision_left = vision_config.get('vision_left', self.vision_left)
+                    self.vision_right = vision_config.get('vision_right', self.vision_right)
+                
+                # Charger paramètres d'historique
+                if 'history' in config:
+                    history_config = config['history']
+                    self.history_length = history_config.get('history_length', self.history_length)
+                    self.history_interval = history_config.get('history_interval', self.history_interval)
+                
+                # Charger paramètres robot
+                if 'robot' in config:
+                    robot_config = config['robot']
+                    self.max_steering_angle = robot_config.get('max_steering_angle', 30.0)
+                    self.max_speed = robot_config.get('max_speed', 1.0)
+                    self.spawn_angle_max_deg = robot_config.get('spawn_angle_max', 60.0)
+                else:
+                    self.max_steering_angle = 30.0
+                    self.max_speed = 1.0
+                    self.spawn_angle_max_deg = 60.0
+                    
+            except Exception as e:
+                print(f"WARNING: Error loading config: {e}")
+                # Valeurs par défaut si erreur
+                self.max_steering_angle = 30.0
+                self.max_speed = 1.0
+                self.spawn_angle_max_deg = 60.0
+        else:
+            # Valeurs par défaut si pas de config
+            self.max_steering_angle = 30.0
+            self.max_speed = 1.0
+            self.spawn_angle_max_deg = 60.0
+    
+    def _calculate_vision_dimensions(self):
+        """Calcule toutes les dimensions basées sur les paramètres de vision."""
+        # Dimensions physiques
+        self.vision_length = self.vision_behind + self.vision_front
+        self.vision_width = self.vision_left + self.vision_right
+        
+        # Dimensions de grille
+        self.grid_rows = int(self.vision_length / self.cell_size)
+        self.grid_cols = int(self.vision_width / self.cell_size)
+        self.robot_row_in_grid = round(self.vision_behind / self.cell_size)
+        self.robot_col_in_grid = round(self.vision_left / self.cell_size)
+        
+        # Dimensions pour le réseau de neurones
+        self.history_dim = self.history_length * 6  # positions (3) + vitesses (3) par frame
+        self.grid_dim = self.grid_rows * self.grid_cols * 2  # 2 canaux
+        
+        # Afficher les dimensions seulement pour le premier environnement
+        if not hasattr(CorridorEnv, '_dimensions_printed'):
+            print(f"DIMENSIONS: Calculated dimensions:")
+            print(f"   Vision: {self.vision_length:.1f}m x {self.vision_width:.1f}m")
+            print(f"   Grid: {self.grid_rows} x {self.grid_cols} cells of {self.cell_size}m")
+            print(f"   Robot: row {self.robot_row_in_grid}, column {self.robot_col_in_grid}")
+            print(f"   History: {self.history_dim} values ({self.history_length} frames)")
+            print(f"   Grid NN: {self.grid_dim} values")
+            CorridorEnv._dimensions_printed = True
+        
+        # Paramètres contrôle par volant (lus depuis le XML du robot)
+        self._load_robot_params_from_xml()
+        
+    def _load_robot_params_from_xml(self):
+        """Charge les paramètres physiques du robot depuis le fichier XML."""
+        import xml.etree.ElementTree as ET
+        
+        try:
+            # Parser le XML du robot
+            tree = ET.parse(self.robot_xml)
+            root = tree.getroot()
+            
+            # Extraire les paramètres depuis les positions des roues
+            # Roues avant : pos=" 0.25  0.20 -0.10" et pos=" 0.25 -0.20 -0.10"
+            # Roues arrière : pos="-0.25  0.20 -0.10" et pos="-0.25 -0.20 -0.10"
+            
+            # Trouver les positions des roues
+            wheel_positions = {}
+            for body in root.findall(".//body[@name]"):
+                name = body.get('name')
+                if name and name.startswith('wheel_'):
+                    pos = body.get('pos', '0 0 0')
+                    x, y, z = map(float, pos.split())
+                    wheel_positions[name] = (x, y, z)
+            
+            if len(wheel_positions) >= 4:
+                # Calculer wheelbase_length (distance avant/arrière)
+                front_x = wheel_positions.get('wheel_fl', (0.25, 0, 0))[0]
+                rear_x = wheel_positions.get('wheel_rl', (-0.25, 0, 0))[0]
+                self.wheelbase_length = abs(front_x - rear_x)
+                
+                # Calculer track_width (distance gauche/droite)
+                left_y = wheel_positions.get('wheel_fl', (0, 0.20, 0))[1]
+                right_y = wheel_positions.get('wheel_fr', (0, -0.20, 0))[1]
+                self.track_width = abs(left_y - right_y)
+                
+                # Extraire wheel_radius depuis la géométrie cylindrique
+                for geom in root.findall(".//geom[@type='cylinder']"):
+                    size = geom.get('size', '0.15 0.03')
+                    radius, half_width = map(float, size.split())
+                    self.wheel_radius = radius
+                    break
+                
+                # Afficher les paramètres robot seulement pour le premier environnement
+                if not hasattr(CorridorEnv, '_robot_params_printed'):
+                    print(f"ROBOT: Parameters read from {self.robot_xml}:")
+                    print(f"   Wheelbase: {self.wheelbase_length:.2f}m")
+                    print(f"   Track width: {self.track_width:.2f}m") 
+                    print(f"   Wheel radius: {self.wheel_radius:.2f}m")
+                    print(f"ROBOT: Control parameters from config:")
+                    print(f"   Max steering: {self.max_steering_angle:.1f} deg")
+                    print(f"   Max speed: {self.max_speed:.1f} m/s")
+                    print(f"   Spawn angle: +/-{self.spawn_angle_max_deg:.1f} deg")
+                    CorridorEnv._robot_params_printed = True
+                
+            else:
+                raise ValueError("Impossible de trouver les 4 roues dans le XML")
+                
+        except Exception as e:
+            print(f"WARNING: Error reading robot XML: {e}")
+            print("   Using default values")
+            # Valeurs par défaut si échec
+            self.wheelbase_length = 0.5
+            self.track_width = 0.4
+            self.wheel_radius = 0.15
+        
+        # Historique des positions pour anticipation
         self.position_history = []  # Buffer des positions + vitesses
         
         # Période de stabilisation
@@ -170,10 +301,7 @@ class CorridorEnv(gym.Env):
         self.cell_map = self._build_cell_map()
         
         # Espaces - CNN 2 canaux + historique simplifié (sans bounding box)
-        # Historique: 4 positions × (3 coords + 3 vitesses) = 4 × 6 = 24 valeurs (RÉDUIT)
-        history_size = self.history_length * 6  # positions (3) + vitesses (3) par frame
-        grid_size = self.grid_rows * self.grid_cols * 2  # 57×40×2 = 4560 (2 canaux, grille plus large)
-        obs_size = 7 + history_size + grid_size  # 7 + 24 + 4560 = 4591 (grille élargie)
+        obs_size = 7 + self.history_dim + self.grid_dim
         self.observation_space = spaces.Box(-np.inf, np.inf, (obs_size,), np.float32)
         # CONTRÔLE PAR VOLANT : 2 actions au lieu de 4
         # action[0] = steering_angle (±1.0 → ±30°)
@@ -207,7 +335,8 @@ class CorridorEnv(gym.Env):
         # SPAWN aléatoire normal
         spawn_x = 0.75  # Position sûre sur floor_flat_70 à 77
         spawn_y = np.random.uniform(-1.0, 1.0)  # Y aléatoire entre -1 et 1
-        spawn_angle = np.random.uniform(-np.pi/3, np.pi/3)  # Angle aléatoire ±60°
+        spawn_angle_rad = np.radians(self.spawn_angle_max_deg)  # Convertir degrés en radians
+        spawn_angle = np.random.uniform(-spawn_angle_rad, spawn_angle_rad)  # Angle aléatoire depuis config
         
         # Position
         self.data.qpos[0] = spawn_x
@@ -312,8 +441,8 @@ class CorridorEnv(gym.Env):
         half_width = self.robot_width / 2    # 0.35m = 3.5 cellules
         
         # Position du robot dans la grille (toujours au centre)
-        robot_grid_row = self.robot_row_in_grid  # 8 (0.8m derrière, fixe en X)
-        robot_grid_col = self.grid_cols // 2      # 15 (centre de la grille, fixe en Y)
+        robot_grid_row = self.robot_row_in_grid  # Position Y basée sur vision_behind
+        robot_grid_col = self.robot_col_in_grid  # Position X basée sur vision_left
         
         # Coins dans le repère LOCAL (pas de rotation car grille ego-centrique)
         # X local = lignes de la grille, Y local = colonnes de la grille
@@ -421,7 +550,7 @@ class CorridorEnv(gym.Env):
                 # Position relative dans le repère de la grille (robot au centre)
                 # i=0 → 0.8m derrière, i=8 → robot, i=60 → 5.2m devant
                 relative_x = (i - self.robot_row_in_grid) * self.cell_size  # Distance devant/derrière
-                relative_y = (j - self.grid_cols // 2) * self.cell_size     # Distance gauche/droite
+                relative_y = (j - self.robot_col_in_grid) * self.cell_size     # Distance gauche/droite
                 
                 # Rotation pour obtenir position dans le repère monde
                 world_offset_x = cos_a * relative_x - sin_a * relative_y
@@ -481,6 +610,7 @@ class CorridorEnv(gym.Env):
         # Échec: tombé dans un trou
         if z < 0.15:
             info['reason'] = 'fell'
+            print(f"DEBUG_TERM: fell at step {self.step_count}, pos=({x:.3f},{y:.3f},{z:.3f})")
             return -10.0, True, info
         
         # Échec: robot retourné
@@ -488,11 +618,25 @@ class CorridorEnv(gym.Env):
         up_z = 1 - 2 * (quat[1]**2 + quat[2]**2)
         if up_z < 0:
             info['reason'] = 'flipped'
+            print(f"DEBUG_TERM: flipped at step {self.step_count}, pos=({x:.3f},{y:.3f},{z:.3f}), up_z={up_z:.3f}")
+            return -10.0, True, info
+        
+        # Échec: robot hors limites Y (trop loin sur les côtés)
+        if abs(y) > self.corridor_width/2 + 2.0:  # +2m de marge
+            info['reason'] = 'out_of_bounds'
+            print(f"DEBUG_TERM: out_of_bounds at step {self.step_count}, pos=({x:.3f},{y:.3f},{z:.3f})")
+            return -10.0, True, info
+        
+        # Échec: robot trop bas (tombé sous le sol)
+        if z < -1.0:  # Bien en dessous du sol
+            info['reason'] = 'fell'
+            print(f"DEBUG_TERM: fell_deep at step {self.step_count}, pos=({x:.3f},{y:.3f},{z:.3f})")
             return -10.0, True, info
         
         # Échec: collision avec les bumps (piliers) ou walls (murs)
         if self._is_colliding_with_bump():
             info['reason'] = 'collision'
+            print(f"DEBUG_TERM: collision at step {self.step_count}, pos=({x:.3f},{y:.3f},{z:.3f})")
             return -10.0, True, info
         
         # Récompense SIMPLE: progression réduite

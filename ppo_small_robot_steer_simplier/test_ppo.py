@@ -211,7 +211,7 @@ def test(model_path, num_episodes, render, show_vision, corridor_xml=None):
                 
             returns.append(ep_return)
             distances.append(info['x'])
-            print(f"Episode {ep + 1}: Return={ep_return:.1f}, Distance={info['x']:.1f}m, Reason={info.get('reason', 'truncated')}")
+            print(f"Episode {ep + 1}: Reward={ep_return:.1f}, Distance={info['x']:.1f}m, Reason={info.get('reason', 'truncated')}")
     else:
         for ep in range(num_episodes):
             obs, _ = env.reset()
@@ -236,15 +236,15 @@ def test(model_path, num_episodes, render, show_vision, corridor_xml=None):
             
             returns.append(ep_return)
             distances.append(info['x'])
-            print(f"Episode {ep + 1}: Return={ep_return:.1f}, Distance={info['x']:.1f}m, Reason={info.get('reason', 'truncated')}")
+            print(f"Episode {ep + 1}: Reward={ep_return:.1f}, Distance={info['x']:.1f}m, Reason={info.get('reason', 'truncated')}")
     
     print(f"\n{'='*50}")
-    print("RÉSULTATS")
+    print("RESULTS")
     print(f"{'='*50}")
     print(f"Episodes: {num_episodes}")
-    print(f"Return moyen: {np.mean(returns):.1f} ± {np.std(returns):.1f}")
-    print(f"Distance moyenne: {np.mean(distances):.1f}m ± {np.std(distances):.1f}m")
-    print(f"Meilleure distance: {max(distances):.1f}m")
+    print(f"Average reward: {np.mean(returns):.1f} +/- {np.std(returns):.1f}")
+    print(f"Average distance: {np.mean(distances):.1f}m +/- {np.std(distances):.1f}m")
+    print(f"Best distance: {max(distances):.1f}m")
     print(f"{'='*50}")
     
     env.close()

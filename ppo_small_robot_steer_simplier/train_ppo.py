@@ -25,19 +25,21 @@ matplotlib.use('Agg')  # Backend non-interactif
 import matplotlib.pyplot as plt
 
 
-def load_config(config_path="config.json"):
-    """Charge la configuration depuis un fichier JSON."""
+def load_config(config_path="config.yaml"):
+    """Charge la configuration depuis un fichier YAML."""
+    import yaml
+    
     if not os.path.exists(config_path):
-        print(f"⚠️  Fichier de config {config_path} non trouvé, utilisation des valeurs par défaut")
+        print(f"WARNING: Config file {config_path} not found, using default values")
         return None
     
     try:
         with open(config_path, 'r', encoding='utf-8') as f:
-            config = json.load(f)
-        print(f"✅ Configuration chargée depuis {config_path}")
+            config = yaml.safe_load(f)
+        print(f"OK: Configuration loaded from {config_path}")
         return config
     except Exception as e:
-        print(f"❌ Erreur lors du chargement de {config_path}: {e}")
+        print(f"ERROR: Failed to load {config_path}: {e}")
         return None
 
 
@@ -97,7 +99,7 @@ def plot_training_progress(metrics_list, current_iteration):
     plt.savefig(output_file, dpi=100, bbox_inches='tight')
     plt.close(fig)  # Fermer pour libérer la mémoire
     
-    print(f"📊 Graphiques sauvegardés: {output_file}")
+    print(f"PLOTS: Graphs saved to {output_file}")
 
 
 
@@ -116,26 +118,37 @@ class Agent(nn.Module):
         # Configuration simplifiée
         if config and 'network' in config:
             net_config = config['network']
-            self.robot_state_dim = net_config.get('robot_state_dim', 7)
-            self.history_dim = net_config.get('history_dim', 24)  # Réduit: 4 × 6 = 24
-            self.grid_dim = net_config.get('grid_dim', 3600)  # 60×30×2 = 3600
-            robot_hidden = net_config.get('robot_net_hidden', [32])  # Simplifié
-            history_hidden = net_config.get('history_net_hidden', [64, 32])  # Simplifié
-            cnn_channels = net_config.get('cnn_channels', [32, 64])  # 2 couches seulement
-            backbone_hidden = net_config.get('backbone_hidden', [64])  # Simplifié
+            robot_hidden = net_config.get('robot_net_hidden', [32])
+            history_hidden = net_config.get('history_net_hidden', [64, 32])
+            cnn_channels = net_config.get('cnn_channels', [32, 64])
+            cnn_kernel_size = net_config.get('cnn_kernel_size', 3)
+            cnn_stride = net_config.get('cnn_stride', 2)
+            backbone_hidden = net_config.get('backbone_hidden', [64])
         else:
             # Valeurs par défaut SIMPLIFIÉES
-            self.robot_state_dim = 7
-            self.history_dim = 24  # Réduit: 4 frames × 6 valeurs = 24
-            self.grid_dim = 3600  # 60×30×2 = 3600
-            robot_hidden = [32]  # Une seule couche
-            history_hidden = [64, 32]  # Deux couches au lieu de trois
-            cnn_channels = [32, 64]  # 2 couches au lieu de 3
-            backbone_hidden = [64]  # Une seule couche
+            robot_hidden = [32]
+            history_hidden = [64, 32]
+            cnn_channels = [32, 64]
+            cnn_kernel_size = 3
+            cnn_stride = 2
+            backbone_hidden = [64]
+        
+        # Calculer dimensions dynamiquement depuis l'observation
+        # Créer un environnement temporaire pour obtenir les dimensions exactes
+        temp_env = CorridorEnv()
+        self.history_dim = temp_env.history_dim
+        self.grid_dim = temp_env.grid_dim
+        self.grid_rows = temp_env.grid_rows
+        self.grid_cols = temp_env.grid_cols
+        temp_env.close()
+        
+        print(f"NETWORK: Using dimensions from environment:")
+        print(f"   History: {self.history_dim} values")
+        print(f"   Grid: {self.grid_rows} x {self.grid_cols} = {self.grid_dim} values")
         
         # MLP pour état robot SIMPLIFIÉ (position + vitesse + angle)
         robot_layers = []
-        prev_dim = self.robot_state_dim  # 7 valeurs
+        prev_dim = 7  # Toujours 7 valeurs (x,y,z,vx,vy,vz,theta)
         for hidden_dim in robot_hidden:
             robot_layers.extend([
                 layer_init(nn.Linear(prev_dim, hidden_dim)),
@@ -160,16 +173,25 @@ class Agent(nn.Module):
         in_channels = 2  # 2 canaux : obstacles, trous
         for out_channels in cnn_channels:
             cnn_layers.extend([
-                nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=2, padding=1),
+                nn.Conv2d(in_channels, out_channels, kernel_size=cnn_kernel_size, stride=cnn_stride, padding=1),
                 nn.ReLU()
             ])
             in_channels = out_channels
         
-        # Calculer la taille après 2 convolutions (57×40 → 15×10 après 2 conv stride=2)
-        final_size = cnn_channels[-1] * 15 * 10  # 64 * 15 * 10 = 9600
+        # Calculer la taille après convolutions dynamiquement
+        # Avec stride=2 et padding=1, chaque conv divise par 2 (arrondi vers le haut)
+        conv_rows = self.grid_rows
+        conv_cols = self.grid_cols
+        for _ in cnn_channels:  # Pour chaque couche de convolution
+            conv_rows = (conv_rows + 2 * 1 - cnn_kernel_size) // cnn_stride + 1  # padding=1
+            conv_cols = (conv_cols + 2 * 1 - cnn_kernel_size) // cnn_stride + 1
+        
+        final_size = cnn_channels[-1] * conv_rows * conv_cols
+        print(f"NETWORK: CNN output size: {cnn_channels[-1]} x {conv_rows} x {conv_cols} = {final_size}")
+        
         cnn_layers.extend([
             nn.Flatten(),
-            layer_init(nn.Linear(final_size, backbone_hidden[0])),  # 9600 → 64
+            layer_init(nn.Linear(final_size, backbone_hidden[0])),
             nn.Tanh()
         ])
         self.cnn = nn.Sequential(*cnn_layers)
@@ -193,12 +215,12 @@ class Agent(nn.Module):
         self.critic = layer_init(nn.Linear(final_dim, 1), std=1.0)
     
     def forward(self, obs):
-        # Décoder observation SIMPLIFIÉE: pos(3) + vel(3) + angle(1) + history(24) + grid(3600)
-        robot_state = obs[:, :self.robot_state_dim]  # 0:7 (pos + vel + angle)
+        # Décoder observation: pos(3) + vel(3) + angle(1) + history + grid
+        robot_state = obs[:, :7]  # Toujours 7 valeurs (x,y,z,vx,vy,vz,theta)
         
-        history_start = self.robot_state_dim  # 7
-        history = obs[:, history_start:history_start+self.history_dim]  # 7:31 (24 valeurs)
-        grid = obs[:, history_start+self.history_dim:].view(-1, 2, 57, 40)  # 31:4591 → (batch, 2, 57, 40)
+        history_start = 7
+        history = obs[:, history_start:history_start+self.history_dim]
+        grid = obs[:, history_start+self.history_dim:].view(-1, 2, self.grid_rows, self.grid_cols)
         
         # Traiter séparément avec architecture SIMPLIFIÉE
         robot_feat = self.robot_net(robot_state)      # 7 → 32
@@ -277,7 +299,7 @@ def update_curriculum(envs, debug_env, iteration, num_iterations):
 
 def debug_render_episode(agent, debug_env, device, max_steps=None):
     """Render un épisode de debug pour voir ce qui se passe."""
-    print("\n🎬 DEBUG RENDER - Visualisation d'un épisode...")
+    print("\nDEBUG: Rendering episode visualization...")
     
     # Reset AVANT de créer le viewer (génère nouveau corridor + nouveau modèle)
     obs, _ = debug_env.reset()
@@ -326,8 +348,8 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
                     
                     # Décoder l'observation SIMPLIFIÉE AVEC HISTORIQUE RÉDUIT
                     robot_state = obs[:7]  # pos(3) + vel(3) + angle(1)
-                    history_simplified = obs[7:31].reshape(4, 6)  # 4 frames × 6 valeurs (3 pos + 3 vel)
-                    grid = obs[31:].reshape(57, 40, 2)  # Grille 57×40×2 (2 canaux, plus large)
+                    history_simplified = obs[7:7+debug_env.history_dim].reshape(debug_env.history_length, 6)  # frames × 6 valeurs
+                    grid = obs[7+debug_env.history_dim:].reshape(debug_env.grid_rows, debug_env.grid_cols, 2)  # Grille dynamique×2
                     
                     print(f"  Robot: pos=({robot_state[0]:.2f}, {robot_state[1]:.2f}, {robot_state[2]:.2f}), vel=({robot_state[3]:.2f}, {robot_state[4]:.2f}, {robot_state[5]:.2f}), angle={robot_state[6]:.2f}rad ({np.degrees(robot_state[6]):.1f}°)")
                     
@@ -341,28 +363,28 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
                     obstacles_grid = grid[:, :, 0]  # Canal obstacles
                     trous_grid = grid[:, :, 1]      # Canal trous
                     
-                    print("  GRILLE (lignes 0-19, EGO-CENTRIQUE - tourne avec robot, PLUS LARGE):")
-                    for i in range(20):  # Lignes 0-19 (robot à ligne 5 maintenant)
+                    print(f"  GRILLE (lignes 0-{debug_env.grid_rows-1}, EGO-CENTRIQUE - tourne avec robot):")
+                    for i in range(min(debug_env.grid_rows, 20)):  # Limiter l'affichage à 20 lignes max
                         line = "    "
-                        for j in range(40):  # TOUTES les colonnes (0-39, robot au centre col 20)
+                        for j in range(min(debug_env.grid_cols, 40)):  # Limiter l'affichage à 40 colonnes max
                             if obstacles_grid[i, j] > 0.5:
-                                line += '△'  # Obstacle (bump)
+                                line += '#'  # Obstacle (bump)
                             elif trous_grid[i, j] > 0.5:
-                                line += '░'  # Trou
+                                line += '.'  # Trou
                             else:
-                                line += '▓'  # Sol
-                        relative_dist = (i - 5) * 0.1  # Distance relative au robot (5 = 0.5m derrière)
+                                line += ' '  # Sol
+                        relative_dist = (i - debug_env.robot_row_in_grid) * debug_env.cell_size  # Distance relative au robot
                         print(f"    {relative_dist:+.1f}m: {line}")
-                    print("    (▓=sol, △=obstacle/bump, ░=trou)")
-                    print("    (Grille EGO-CENTRIQUE: tourne avec le robot, 'devant' = toujours vers le haut)")
-                    print("    (VISION ÉLARGIE: 4m de largeur au lieu de 3m pour mieux voir les côtés)")
+                    print("    (space=floor, #=obstacle/bump, .=hole)")
+                    print("    (EGO-CENTRIC grid: rotates with robot, 'forward' = always up)")
+                    print(f"    (Vision: {debug_env.vision_length}m x {debug_env.vision_width}m, {debug_env.cell_size}m cells)")
                 
                 v.sync()
                 time.sleep(0.05)  # 20 FPS
             
             final_x = debug_env.data.qpos[0]
             reason = info.get('reason', 'truncated')
-            print(f"Épisode terminé: {reason} | Steps: {step} | Distance: {final_x:.2f}m | Return: {ep_return:.1f}")
+            print(f"Episode ended: {reason} | Steps: {step} | Distance: {final_x:.2f}m | Reward: {ep_return:.1f}")
             
             # Attendre un peu pour voir le résultat
             time.sleep(2.0)
@@ -372,7 +394,7 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
         print("Continuons sans render...")
 
 
-def train(config_path="config.json", **kwargs):
+def train(config_path="config.yaml", **kwargs):
     """Entraînement PPO optimisé avec configuration JSON."""
     
     # Charger configuration
@@ -513,21 +535,21 @@ def train(config_path="config.json", **kwargs):
         latest_step, latest_model = existing_models[0]
         model_path = os.path.join("models", latest_model)
         
-        print(f"🔄 MODÈLE EXISTANT DÉTECTÉ: {latest_model}")
-        print(f"   Chargement depuis {latest_step:,} steps...")
+        print(f"RESUME: Existing model detected: {latest_model}")
+        print(f"   Loading from {latest_step:,} steps...")
         
         try:
             agent.load_state_dict(torch.load(model_path, map_location=device))
             start_iteration = (latest_step // batch_size) + 1
-            print(f"   ✅ Modèle chargé ! Reprise à l'itération {start_iteration}")
-            print(f"   📊 Steps déjà effectués: {latest_step:,}")
-            print(f"   🎯 Steps restants: {total_timesteps - latest_step:,}")
+            print(f"   OK: Model loaded! Resuming at iteration {start_iteration}")
+            print(f"   STATS: Steps completed: {latest_step:,}")
+            print(f"   TARGET: Steps remaining: {total_timesteps - latest_step:,}")
         except Exception as e:
-            print(f"   ❌ Erreur chargement: {e}")
-            print(f"   🔄 Démarrage depuis zéro...")
+            print(f"   ERROR: Loading failed: {e}")
+            print(f"   RESTART: Starting from scratch...")
             start_iteration = 1
     else:
-        print("🆕 NOUVEAU MODÈLE - Démarrage depuis zéro")
+        print("NEW: New model - Starting from scratch")
     
     # Buffers GPU
     obs = torch.zeros((num_steps, num_envs, obs_dim), device=device)
@@ -562,9 +584,11 @@ def train(config_path="config.json", **kwargs):
         'success': 0,
         'fell': 0,
         'flipped': 0,
+        'collision': 0,
         'out_of_bounds': 0,
         'stuck': 0,
         'truncated': 0,
+        'terminated': 0,
     }
     
     os.makedirs("models", exist_ok=True)
@@ -594,43 +618,80 @@ def train(config_path="config.json", **kwargs):
             next_obs = torch.tensor(next_obs_np, dtype=torch.float32, device=device)
             next_done = torch.tensor(next_done_np, dtype=torch.float32, device=device)
             
-            # Log épisodes terminés - LOGIQUE SÉCURISÉE
+            # Log épisodes terminés - LOGIQUE CORRIGÉE
             for i in range(num_envs):
                 if next_done_np[i]:  # Cet environnement s'est terminé
-                    # Récupérer infos de manière sécurisée
+                    # Récupérer infos de manière simple et robuste
                     try:
-                        if isinstance(infos, dict):
-                            # Structure vectorisée: {'key': [val0, val1, ...], '_key': [mask0, mask1, ...]}
-                            x_list = infos.get('x', [])
-                            x_mask = infos.get('_x', [])
-                            dist = x_list[i] if i < len(x_list) and i < len(x_mask) and x_mask[i] else 0
-                            
+                        # Essayer d'abord le format simple (liste d'infos)
+                        if isinstance(infos, list) and i < len(infos) and infos[i]:
+                            info = infos[i]
+                            reason = info.get('reason', 'truncated' if trunc[i] else 'unknown')
+                            dist = info.get('x', 0)
+                            ret = info.get('episode', {}).get('r', reward[i] if i < len(reward) else 0)
+                            steps = info.get('step', 0)
+                        
+                        # Sinon essayer le format vectorisé avec masques
+                        elif isinstance(infos, dict):
+                            # Récupérer reason avec masque - CORRECTION: reason_list est un numpy array
                             reason_list = infos.get('reason', [])
                             reason_mask = infos.get('_reason', [])
-                            reason = reason_list[i] if i < len(reason_list) and i < len(reason_mask) and reason_mask[i] else ('truncated' if trunc[i] else 'unknown')
-                            
-                            # Episode stats du wrapper
-                            episode_list = infos.get('episode', [])
-                            episode_mask = infos.get('_episode', [])
-                            if i < len(episode_list) and i < len(episode_mask) and episode_mask[i] and episode_list[i]:
-                                ret = episode_list[i].get('r', 0)
+                            if i < len(reason_list) and i < len(reason_mask) and reason_mask[i] and reason_list[i] is not None:
+                                reason = reason_list[i]
                             else:
-                                ret = reward[i] if i < len(reward) else 0
+                                reason = 'truncated' if trunc[i] else 'terminated'
+                            
+                            # Récupérer distance avec masque - CORRECTION: x_list est un numpy array
+                            x_list = infos.get('x', [])
+                            x_mask = infos.get('_x', [])
+                            if i < len(x_list) and i < len(x_mask) and x_mask[i]:
+                                dist = float(x_list[i])
+                            else:
+                                dist = 0.0
+                            
+                            # Récupérer steps avec masque - CORRECTION: step_list est un numpy array
+                            step_list = infos.get('step', [])
+                            step_mask = infos.get('_step', [])
+                            if i < len(step_list) and i < len(step_mask) and step_mask[i]:
+                                steps = int(step_list[i])
+                            else:
+                                steps = 0
+                            
+                            # Récupérer reward depuis episode stats - CORRECTION: episode est un dict avec arrays
+                            episode_dict = infos.get('episode', {})
+                            episode_mask = infos.get('_episode', [])
+                            if i < len(episode_mask) and episode_mask[i] and 'r' in episode_dict:
+                                episode_r = episode_dict['r']
+                                episode_r_mask = episode_dict.get('_r', [])
+                                if i < len(episode_r) and i < len(episode_r_mask) and episode_r_mask[i]:
+                                    ret = float(episode_r[i])
+                                else:
+                                    ret = float(reward[i]) if i < len(reward) else 0.0
+                            else:
+                                ret = float(reward[i]) if i < len(reward) else 0.0
+                        
                         else:
-                            # Fallback simple
-                            ret = reward[i] if i < len(reward) else 0
-                            dist = 0
-                            reason = "truncated" if trunc[i] else "unknown"
-                    except (IndexError, KeyError, TypeError):
+                            # Fallback complet
+                            reason = 'truncated' if trunc[i] else 'unknown'
+                            dist = 0.0
+                            ret = float(reward[i]) if i < len(reward) else 0.0
+                            steps = 0
+                            
+                    except (IndexError, KeyError, TypeError, AttributeError) as e:
                         # Fallback en cas d'erreur
-                        ret = reward[i] if i < len(reward) else 0
-                        dist = 0
-                        reason = "truncated" if trunc[i] else "unknown"
+                        reason = 'truncated' if trunc[i] else 'terminated'
+                        dist = 0.0
+                        ret = float(reward[i]) if i < len(reward) else 0.0
+                        steps = 0
+                        print(f"  WARNING: Episode info extraction failed for env {i}: {e}")
                     
-                    episode_returns.append(float(ret))
-                    episode_distances.append(float(dist))
-                    episode_steps.append(infos.get('step', [0] * num_envs)[i] if isinstance(infos, dict) else 0)
+                    episode_returns.append(ret)
+                    episode_distances.append(dist)
+                    episode_steps.append(steps)
                     total_episodes += 1
+                    
+                    # Log individuel pour chaque épisode
+                    print(f"Episode {total_episodes}: {reason} | Steps: {steps} | Distance: {dist:.2f}m | Reward: {ret:.1f}")
                     
                     if ret > best_return:
                         best_return = ret
@@ -742,7 +803,7 @@ def train(config_path="config.json", **kwargs):
                 })
                 
                 last_batch_episode = batch_end
-                print(f"✅ Batch {len(batch_metrics)} complété (épisodes {batch_start+1}-{batch_end})")
+                print(f"BATCH: Batch {len(batch_metrics)} completed (episodes {batch_start+1}-{batch_end})")
             
             print(f"\n{'='*70}")
             print(f"ITERATION {iteration}/{num_iterations} | Steps: {global_step:,} | SPS: {sps:,} | Time: {elapsed:.0f}s")
@@ -755,19 +816,19 @@ def train(config_path="config.json", **kwargs):
                 recent_steps = episode_steps[-100:] if len(episode_steps) >= 100 else episode_steps
                 
                 success_rate = 100 * successes / max(1, total_episodes)
-                print(f"📊 ÉPISODES: {total_episodes} total | Succès: {successes} ({success_rate:.1f}%)")
-                print(f"📊 BATCHES: {len(batch_metrics)} batches de {batch_size_metrics} épisodes complétés")
-                print(f"📈 RETURN  : Récent {np.mean(recent_ret):>7.1f} ± {np.std(recent_ret):>5.1f} | Meilleur {best_return:>7.1f}")
-                print(f"🎯 DISTANCE: Récent {np.mean(recent_dist):>7.1f}m ± {np.std(recent_dist):>5.1f}m | Meilleur {best_distance:>7.1f}m")
-                print(f"⏱️  SURVIE  : Récent {np.mean(recent_steps):>7.0f} steps ± {np.std(recent_steps):>5.0f}")
+                print(f"EPISODES: {total_episodes} total | Success: {successes} ({success_rate:.1f}%)")
+                print(f"BATCHES: {len(batch_metrics)} batches of {batch_size_metrics} episodes completed")
+                print(f"REWARD  : Recent {np.mean(recent_ret):>7.1f} +/- {np.std(recent_ret):>5.1f} | Best {best_return:>7.1f}")
+                print(f"DISTANCE: Recent {np.mean(recent_dist):>7.1f}m +/- {np.std(recent_dist):>5.1f}m | Best {best_distance:>7.1f}m")
+                print(f"SURVIVAL: Recent {np.mean(recent_steps):>7.0f} steps +/- {np.std(recent_steps):>5.0f}")
                 
                 # Récapitulatif terminaisons (seulement si > 0)
                 active_reasons = {k: v for k, v in termination_reasons.items() if v > 0}
                 if active_reasons:
                     reasons_str = " | ".join([f"{k}:{v}" for k, v in active_reasons.items()])
-                    print(f"🔚 TERMINAISONS: {reasons_str}")
+                    print(f"TERMINATIONS: {reasons_str}")
             else:
-                print(f"⚠️  AUCUN ÉPISODE TERMINÉ (épisodes en cours...)")
+                print(f"WARNING: No episodes completed (episodes in progress...)")
             
             print(f"{'='*70}")
         
@@ -775,7 +836,7 @@ def train(config_path="config.json", **kwargs):
         if iteration % save_interval == 0:
             model_path = f"models/ppo_corridor_{global_step}.pth"
             torch.save(agent.state_dict(), model_path)
-            print(f"💾 Modèle sauvegardé: {model_path}")
+            print(f"SAVE: Model saved to {model_path}")
             
             # Sauvegarder métriques des batches en CSV
             if batch_metrics:
@@ -792,7 +853,7 @@ def train(config_path="config.json", **kwargs):
                     for metrics in batch_metrics:
                         writer.writerow(metrics)
                 
-                print(f"📊 Métriques sauvegardées: {metrics_file}")
+                print(f"METRICS: Batch metrics saved to {metrics_file}")
         
         # Afficher graphiques
         if iteration % plot_interval == 0 and iteration > 0 and batch_metrics:
@@ -838,7 +899,7 @@ def train(config_path="config.json", **kwargs):
             for metrics in batch_metrics:
                 writer.writerow(metrics)
         
-        print(f"\n📊 Toutes les métriques sauvegardées: {metrics_file}")
+        print(f"\nMETRICS: All metrics saved to {metrics_file}")
         
         # Générer graphique final
         plot_training_progress(batch_metrics, num_iterations)
@@ -857,7 +918,7 @@ if __name__ == "__main__":
     import argparse
     
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, default="config.json", help="Fichier de configuration JSON")
+    parser.add_argument("--config", type=str, default="config.yaml", help="Fichier de configuration YAML")
     parser.add_argument("--timesteps", type=int, help="Override total timesteps")
     parser.add_argument("--num-envs", type=int, help="Override nombre d'environnements")
     parser.add_argument("--num-steps", type=int, help="Override steps par rollout")
