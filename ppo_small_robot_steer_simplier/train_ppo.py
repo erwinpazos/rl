@@ -372,10 +372,10 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
                             elif trous_grid[i, j] > 0.5:
                                 line += '.'  # Trou
                             else:
-                                line += ' '  # Sol
+                                line += '/'  # Sol
                         relative_dist = (i - debug_env.robot_row_in_grid) * debug_env.cell_size  # Distance relative au robot
                         print(f"    {relative_dist:+.1f}m: {line}")
-                    print("    (space=floor, #=obstacle/bump, .=hole)")
+                    print("    (/=floor, #=obstacle/bump, .=hole)")
                     print("    (EGO-CENTRIC grid: rotates with robot, 'forward' = always up)")
                     print(f"    (Vision: {debug_env.vision_length}m x {debug_env.vision_width}m, {debug_env.cell_size}m cells)")
                 

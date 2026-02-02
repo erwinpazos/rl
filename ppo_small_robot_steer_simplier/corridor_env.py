@@ -633,11 +633,11 @@ class CorridorEnv(gym.Env):
             print(f"DEBUG_TERM: fell_deep at step {self.step_count}, pos=({x:.3f},{y:.3f},{z:.3f})")
             return -10.0, True, info
         
-        # Échec: collision avec les bumps (piliers) ou walls (murs)
-        if self._is_colliding_with_bump():
-            info['reason'] = 'collision'
-            print(f"DEBUG_TERM: collision at step {self.step_count}, pos=({x:.3f},{y:.3f},{z:.3f})")
-            return -10.0, True, info
+        # Collision désactivée - le robot peut passer à travers les bumps
+        # if self._is_colliding_with_bump():
+        #     info['reason'] = 'collision'
+        #     print(f"DEBUG_TERM: collision at step {self.step_count}, pos=({x:.3f},{y:.3f},{z:.3f})")
+        #     return -10.0, True, info
         
         # Récompense SIMPLE: progression réduite
         delta_x = x - self.prev_x

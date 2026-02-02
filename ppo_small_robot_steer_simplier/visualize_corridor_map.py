@@ -296,7 +296,7 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
             if val > 0.5:
                 line += '#'  # Obstacle
             else:
-                line += '.'  # Free
+                line += '/'  # Sol libre
         relative_dist = (i - env.robot_row_in_grid) * env.cell_size
         print(f"{line} {relative_dist:+.1f}m")
     
@@ -313,9 +313,9 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
         for j in range(min(env.grid_cols, 50)):  # Limiter colonnes affichées
             val = grid[i, j, 1]  # Canal 1
             if val > 0.5:
-                line += '.'  # Hole
+                line += '.'  # Trou
             else:
-                line += ' '  # Free
+                line += '/'  # Sol libre
         relative_dist = (i - env.robot_row_in_grid) * env.cell_size
         print(f"{line} {relative_dist:+.1f}m")
     
@@ -350,7 +350,7 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
                 elif trou > 0.5:
                     symbol = '.'  # Hole (hole or exterior front/back)
                 else:
-                    symbol = ' '  # Navigable floor
+                    symbol = '/'  # Navigable floor
             
             line += symbol
         
@@ -360,7 +360,7 @@ def visualize_cnn_input(corridor_xml="corridor_100.xml", robot_x=None, robot_y=N
     
     print()
     print("LEGEND:")
-    print("  # = obstacle (bump OR side wall)    [space] = navigable floor    . = hole (hole OR exterior)")
+    print("  # = obstacle (bump OR side wall)    / = navigable floor    . = hole (hole OR exterior)")
     print("  R = robot (always at center of ego-centric grid)")
     print(f"  Vision: {env.grid_rows}x{env.grid_cols}x2 cells of {env.cell_size}m")
     print(f"  Covers: {env.vision_length}m front/back x {env.vision_width}m width")
