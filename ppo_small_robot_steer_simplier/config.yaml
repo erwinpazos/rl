@@ -12,11 +12,11 @@ training:
 
 # Hyperparamètres PPO
 ppo:
-  lr: 0.0005              # Learning rate
+  lr: 0.0004              # Learning rate
   gamma: 0.995            # Facteur de discount (récompenses futures)
   gae_lambda: 0.98        # Lambda pour Generalized Advantage Estimation
   clip_coef: 0.2          # Coefficient de clipping PPO
-  ent_coef: 0.05          # Coefficient d'entropie (exploration)
+  ent_coef: 0.01          # Coefficient d'entropie (exploration)
   vf_coef: 0.5            # Coefficient de la value function loss
   max_grad_norm: 0.5      # Clipping des gradients
 
@@ -26,7 +26,7 @@ optimizer:
 
 # Configuration de l'environnement
 environment:
-  max_steps: 3000                                    # Steps max par épisode
+  max_steps: 4000                                    # Steps max par épisode
   use_random_corridor: true                          # true = corridors aléatoires, false = corridor fixe
   corridor_xml: "corridor_3x100_no_full_obstacles.xml"  # Fichier corridor si use_random_corridor=false
 

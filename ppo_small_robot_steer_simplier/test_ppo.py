@@ -1,5 +1,6 @@
 """
 Test d'un agent PPO entraîné.
+Compatible avec le système de configuration YAML dynamique.
 """
 import argparse
 import glob
@@ -14,6 +15,24 @@ from mujoco import viewer
 from corridor_env import CorridorEnv
 
 
+def load_config(config_path="config.yaml"):
+    """Charge la configuration depuis un fichier YAML."""
+    import yaml
+    
+    if not os.path.exists(config_path):
+        print(f"WARNING: Config file {config_path} not found, using default values")
+        return None
+    
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        print(f"OK: Configuration loaded from {config_path}")
+        return config
+    except Exception as e:
+        print(f"ERROR: Failed to load {config_path}: {e}")
+        return None
+
+
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     nn.init.orthogonal_(layer.weight, std)
     nn.init.constant_(layer.bias, bias_const)
@@ -21,75 +40,124 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
 
 
 class Agent(nn.Module):
-    """Même architecture que train_ppo.py"""
+    """Architecture dynamique compatible avec le nouveau système YAML."""
     
-    def __init__(self, obs_dim, act_dim):
+    def __init__(self, obs_dim, act_dim, config=None):
         super().__init__()
         
-        # Observation: pos(3) + vel(3) + bbox(8) + history(88) + grid(5400) = 5502
-        self.robot_state_dim = 6   # pos(3) + vel(3)
-        self.bbox_dim = 8          # 4 coins × 2 coords
-        self.history_dim = 88      # 8 frames × 11 valeurs (8 coins + 3 vitesses) = 88
-        self.grid_dim = 5400       # 60×30×3 = 5400
+        # Configuration simplifiée
+        if config and 'network' in config:
+            net_config = config['network']
+            robot_hidden = net_config.get('robot_net_hidden', [32])
+            history_hidden = net_config.get('history_net_hidden', [64, 32])
+            cnn_channels = net_config.get('cnn_channels', [32, 64])
+            cnn_kernel_size = net_config.get('cnn_kernel_size', 3)
+            cnn_stride = net_config.get('cnn_stride', 2)
+            backbone_hidden = net_config.get('backbone_hidden', [64])
+        else:
+            # Valeurs par défaut SIMPLIFIÉES
+            robot_hidden = [32]
+            history_hidden = [64, 32]
+            cnn_channels = [32, 64]
+            cnn_kernel_size = 3
+            cnn_stride = 2
+            backbone_hidden = [64]
         
-        # MLP pour état robot (position + vitesse + bbox)
-        self.robot_net = nn.Sequential(
-            layer_init(nn.Linear(self.robot_state_dim + self.bbox_dim, 64)),  # 14
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-        )
+        # Calculer dimensions dynamiquement depuis l'observation
+        # Créer un environnement temporaire pour obtenir les dimensions exactes
+        temp_env = CorridorEnv()
+        self.history_dim = temp_env.history_dim
+        self.grid_dim = temp_env.grid_dim
+        self.grid_rows = temp_env.grid_rows
+        self.grid_cols = temp_env.grid_cols
+        temp_env.close()
         
-        # MLP pour historique des positions + vitesses (anticipation)
-        self.history_net = nn.Sequential(
-            layer_init(nn.Linear(self.history_dim, 128)),
-            nn.Tanh(),
-            layer_init(nn.Linear(128, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 32)),
-            nn.Tanh(),
-        )
+        print(f"NETWORK: Using dimensions from environment:")
+        print(f"   History: {self.history_dim} values")
+        print(f"   Grid: {self.grid_rows} x {self.grid_cols} = {self.grid_dim} values")
         
-        # CNN UNIQUE pour grille 60×30×3
-        self.cnn = nn.Sequential(
-            nn.Conv2d(3, 32, kernel_size=3, stride=2, padding=1),   # 60×30 -> 30×15
-            nn.ReLU(),
-            nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1),  # 30×15 -> 15×8
-            nn.ReLU(),
-            nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1), # 15×8 -> 8×4
-            nn.ReLU(),
-            nn.Flatten(),  # 128 × 8 × 4 = 4096
-            layer_init(nn.Linear(4096, 128)),
-            nn.Tanh(),
-        )
+        # MLP pour état robot SIMPLIFIÉ (position + vitesse + angle)
+        robot_layers = []
+        prev_dim = 7  # Toujours 7 valeurs (x,y,z,vx,vy,vz,theta)
+        for hidden_dim in robot_hidden:
+            robot_layers.extend([
+                layer_init(nn.Linear(prev_dim, hidden_dim)),
+                nn.Tanh()
+            ])
+            prev_dim = hidden_dim
+        self.robot_net = nn.Sequential(*robot_layers)
         
-        # Backbone combiné
-        self.backbone = nn.Sequential(
-            layer_init(nn.Linear(64 + 32 + 128, 128)),  # robot + history + cnn
-            nn.Tanh(),
-            layer_init(nn.Linear(128, 64)),
-            nn.Tanh(),
-        )
+        # MLP pour historique RÉDUIT (anticipation)
+        history_layers = []
+        prev_dim = self.history_dim  # 24 au lieu de 48
+        for hidden_dim in history_hidden:
+            history_layers.extend([
+                layer_init(nn.Linear(prev_dim, hidden_dim)),
+                nn.Tanh()
+            ])
+            prev_dim = hidden_dim
+        self.history_net = nn.Sequential(*history_layers)
         
-        self.actor_mean = layer_init(nn.Linear(64, act_dim), std=0.01)
+        # CNN SIMPLIFIÉ pour grille dynamique×2 (SEULEMENT 2 COUCHES)
+        cnn_layers = []
+        in_channels = 2  # 2 canaux : obstacles, trous
+        for out_channels in cnn_channels:
+            cnn_layers.extend([
+                nn.Conv2d(in_channels, out_channels, kernel_size=cnn_kernel_size, stride=cnn_stride, padding=1),
+                nn.ReLU()
+            ])
+            in_channels = out_channels
+        
+        # Calculer la taille après convolutions dynamiquement
+        # Avec stride=2 et padding=1, chaque conv divise par 2 (arrondi vers le haut)
+        conv_rows = self.grid_rows
+        conv_cols = self.grid_cols
+        for _ in cnn_channels:  # Pour chaque couche de convolution
+            conv_rows = (conv_rows + 2 * 1 - cnn_kernel_size) // cnn_stride + 1  # padding=1
+            conv_cols = (conv_cols + 2 * 1 - cnn_kernel_size) // cnn_stride + 1
+        
+        final_size = cnn_channels[-1] * conv_rows * conv_cols
+        print(f"NETWORK: CNN output size: {cnn_channels[-1]} x {conv_rows} x {conv_cols} = {final_size}")
+        
+        cnn_layers.extend([
+            nn.Flatten(),
+            layer_init(nn.Linear(final_size, backbone_hidden[0])),
+            nn.Tanh()
+        ])
+        self.cnn = nn.Sequential(*cnn_layers)
+        
+        # Backbone combiné SIMPLIFIÉ
+        backbone_input_dim = robot_hidden[-1] + history_hidden[-1] + backbone_hidden[0]  # 32 + 32 + 64 = 128
+        backbone_layers = []
+        prev_dim = backbone_input_dim
+        for hidden_dim in backbone_hidden:
+            backbone_layers.extend([
+                layer_init(nn.Linear(prev_dim, hidden_dim)),
+                nn.Tanh()
+            ])
+            prev_dim = hidden_dim
+        self.backbone = nn.Sequential(*backbone_layers)
+        
+        # Actor/Critic
+        final_dim = backbone_hidden[-1]
+        self.actor_mean = layer_init(nn.Linear(final_dim, act_dim), std=0.01)
         self.actor_logstd = nn.Parameter(torch.zeros(1, act_dim))
-        self.critic = layer_init(nn.Linear(64, 1), std=1.0)
+        self.critic = layer_init(nn.Linear(final_dim, 1), std=1.0)
     
     def forward(self, obs):
-        # Décoder observation
-        robot_state = obs[:, :self.robot_state_dim]  # 0:6
-        bbox = obs[:, self.robot_state_dim:self.robot_state_dim+self.bbox_dim]  # 6:14
-        robot_and_bbox = torch.cat([robot_state, bbox], dim=1)  # 14 valeurs
+        # Décoder observation: pos(3) + vel(3) + angle(1) + history + grid
+        robot_state = obs[:, :7]  # Toujours 7 valeurs (x,y,z,vx,vy,vz,theta)
         
-        history_start = self.robot_state_dim + self.bbox_dim  # 14
-        history = obs[:, history_start:history_start+self.history_dim]  # 14:102
-        grid = obs[:, history_start+self.history_dim:].view(-1, 3, 60, 30)  # 102:5502 → (batch, 3, 60, 30)
+        history_start = 7
+        history = obs[:, history_start:history_start+self.history_dim]
+        grid = obs[:, history_start+self.history_dim:].view(-1, 2, self.grid_rows, self.grid_cols)
         
-        # Traiter séparément
-        robot_feat = self.robot_net(robot_and_bbox)
-        history_feat = self.history_net(history)
-        grid_feat = self.cnn(grid)
+        # Traiter séparément avec architecture SIMPLIFIÉE
+        robot_feat = self.robot_net(robot_state)      # 7 → 32
+        history_feat = self.history_net(history)      # 24 → 32
+        grid_feat = self.cnn(grid)                    # dynamique → 64
         
+        # Combiner les trois sources (32 + 32 + 64 = 128)
         combined = torch.cat([robot_feat, history_feat, grid_feat], dim=1)
         return self.backbone(combined)
     
@@ -104,66 +172,96 @@ class Agent(nn.Module):
         return torch.distributions.Normal(mean, std).sample()
 
 
-def display_vision(obs, step, ret):
+def display_vision(obs, step, ret, env):
     """Afficher vision robot dans terminal."""
     print("\033[2J\033[H", end="")
     
-    # Décoder observation: pos(3) + vel(3) + bbox(8) + history(88) + grid(5400)
-    robot = obs[:6]
-    bbox = obs[6:14]
-    grid = obs[102:].reshape(60, 30, 3)  # 3 canaux
+    # Décoder observation: pos(3) + vel(3) + angle(1) + history + grid
+    robot_state = obs[:7]  # pos(3) + vel(3) + angle(1)
+    history_start = 7
+    history = obs[history_start:history_start+env.history_dim].reshape(env.history_length, 6)
+    grid = obs[history_start+env.history_dim:].reshape(env.grid_rows, env.grid_cols, 2)
     
-    print("=" * 50)
+    print("=" * 60)
     print(f"Step: {step} | Return: {ret:.1f}")
-    print(f"Position: x={robot[0]:.2f}m, y={robot[1]:.2f}m, z={robot[2]:.2f}m")
-    print(f"Velocity: vx={robot[3]:.2f}, vy={robot[4]:.2f}, vz={robot[5]:.2f}")
-    print("=" * 50)
-    print("\nVision 60×30×3 EGO-CENTRIQUE (robot à ligne 8):")
-    print("Canal 0=Sol, Canal 1=Obstacles, Canal 2=Trous")
-    print("-" * 40)
+    print(f"Position: x={robot_state[0]:.2f}m, y={robot_state[1]:.2f}m, z={robot_state[2]:.2f}m")
+    print(f"Velocity: vx={robot_state[3]:.2f}, vy={robot_state[4]:.2f}, vz={robot_state[5]:.2f}")
+    print(f"Angle: {robot_state[6]:.2f}rad ({np.degrees(robot_state[6]):.1f}°)")
+    print("=" * 60)
+    print(f"\nVision {env.grid_rows}×{env.grid_cols}×2 EGO-CENTRIQUE (robot à ligne {env.robot_row_in_grid}):")
+    print("Canal 0=Obstacles, Canal 1=Trous")
+    print("-" * 50)
     
-    # Afficher grille combinée (20 premières lignes)
-    for i in range(20):
-        relative_dist = (i - 8) * 0.1  # Robot à ligne 8
+    # Afficher grille combinée (20 premières lignes max)
+    display_rows = min(env.grid_rows, 20)
+    for i in range(display_rows):
+        relative_dist = (i - env.robot_row_in_grid) * env.cell_size
         line = f"{relative_dist:+.1f}m: "
-        for j in range(30):
-            # Combiner les 3 canaux pour affichage
-            sol = grid[i, j, 0]
-            obstacle = grid[i, j, 1]
-            trou = grid[i, j, 2]
+        for j in range(min(env.grid_cols, 40)):  # Limiter colonnes
+            # Combiner les 2 canaux pour affichage
+            obstacle = grid[i, j, 0]
+            trou = grid[i, j, 1]
             
             if obstacle > 0.5:
-                line += 'X'  # Obstacle (bump ou extérieur)
+                line += '#'  # Obstacle (bump)
             elif trou > 0.5:
-                line += '░'  # Trou
-            elif sol > 0.5:
-                line += '▓'  # Sol
+                line += '.'  # Trou
             else:
-                line += '?'  # Erreur
+                line += '/'  # Sol navigable
         print(line)
     
-    print("-" * 40)
-    print("Légende: X=obstacle  ▓=sol  ░=trou")
-    print("3 canaux binaires: [sol, obstacles, trous]")
-    print("=" * 50)
+    print("-" * 50)
+    print("Légende: /=sol navigable  #=obstacle/bump  .=trou")
+    print("2 canaux binaires: [obstacles, trous]")
+    print(f"Vision: {env.vision_length:.1f}m x {env.vision_width:.1f}m, cellules de {env.cell_size}m")
+    print("=" * 60)
 
 
-def test(model_path, num_episodes, render, show_vision, corridor_xml=None):
+def make_env(config=None):
+    """Factory pour environnement avec configuration."""
+    if config and 'environment' in config:
+        env_config = config['environment']
+        max_steps = env_config.get('max_steps', 1000)
+        use_random = env_config.get('use_random_corridor', True)
+        corridor_xml_file = env_config.get('corridor_xml', 'corridor_3x100_no_full_obstacles.xml')
+    else:
+        max_steps = 1000
+        use_random = True
+        corridor_xml_file = 'corridor_3x100_no_full_obstacles.xml'
+    
+    # Utiliser corridor_xml=None pour générer aléatoirement
+    corridor_xml = None if use_random else corridor_xml_file
+        
+    return CorridorEnv(max_steps=max_steps, corridor_xml=corridor_xml)
+
+
+def test(model_path, num_episodes, render, show_vision, config_path="config.yaml", corridor_xml=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    env = CorridorEnv(corridor_xml=corridor_xml)
+    # Charger configuration
+    config = load_config(config_path)
+    
+    # Créer environnement avec config
+    if corridor_xml:
+        # Override avec corridor spécifique
+        env = CorridorEnv(corridor_xml=corridor_xml)
+    else:
+        env = make_env(config)
     
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
-    agent = Agent(obs_dim, act_dim).to(device)
+    agent = Agent(obs_dim, act_dim, config).to(device)
     agent.load_state_dict(torch.load(model_path, map_location=device))
     agent.eval()
     
     print(f"Model: {model_path}")
     if corridor_xml:
         print(f"Corridor: {corridor_xml} (fixe)")
-    else:
+    elif config and config.get('environment', {}).get('use_random_corridor', True):
         print(f"Corridor: généré aléatoirement")
+    else:
+        corridor_file = config.get('environment', {}).get('corridor_xml', 'corridor_3x100_no_full_obstacles.xml')
+        print(f"Corridor: {corridor_file} (fixe)")
     print(f"Device: {device}\n")
     
     returns = []
@@ -194,7 +292,7 @@ def test(model_path, num_episodes, render, show_vision, corridor_xml=None):
                 
                 while not done and v.is_running():
                     if show_vision:
-                        display_vision(obs, step, ep_return)
+                        display_vision(obs, step, ep_return, env)
                     
                     with torch.no_grad():
                         obs_t = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).to(device)
@@ -211,7 +309,14 @@ def test(model_path, num_episodes, render, show_vision, corridor_xml=None):
                 
             returns.append(ep_return)
             distances.append(info['x'])
-            print(f"Episode {ep + 1}: Reward={ep_return:.1f}, Distance={info['x']:.1f}m, Reason={info.get('reason', 'truncated')}")
+            # Déterminer la vraie raison de terminaison
+            if term:
+                reason = info.get('reason', 'terminated')
+            elif trunc:
+                reason = 'truncated'
+            else:
+                reason = 'unknown'
+            print(f"Episode {ep + 1}: Reward={ep_return:.1f}, Distance={info['x']:.1f}m, Reason={reason}")
     else:
         for ep in range(num_episodes):
             obs, _ = env.reset()
@@ -221,7 +326,7 @@ def test(model_path, num_episodes, render, show_vision, corridor_xml=None):
             
             while not done:
                 if show_vision:
-                    display_vision(obs, step, ep_return)
+                    display_vision(obs, step, ep_return, env)
                     time.sleep(0.05)
                 
                 with torch.no_grad():
@@ -236,7 +341,14 @@ def test(model_path, num_episodes, render, show_vision, corridor_xml=None):
             
             returns.append(ep_return)
             distances.append(info['x'])
-            print(f"Episode {ep + 1}: Reward={ep_return:.1f}, Distance={info['x']:.1f}m, Reason={info.get('reason', 'truncated')}")
+            # Déterminer la vraie raison de terminaison
+            if term:
+                reason = info.get('reason', 'terminated')
+            elif trunc:
+                reason = 'truncated'
+            else:
+                reason = 'unknown'
+            print(f"Episode {ep + 1}: Reward={ep_return:.1f}, Distance={info['x']:.1f}m, Reason={reason}")
     
     print(f"\n{'='*50}")
     print("RESULTS")
@@ -253,7 +365,8 @@ def test(model_path, num_episodes, render, show_vision, corridor_xml=None):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default=None)
-    parser.add_argument("--corridor", type=str, default=None, help="Corridor XML fixe (défaut: aléatoire)")
+    parser.add_argument("--config", type=str, default="config.yaml", help="Fichier de configuration YAML")
+    parser.add_argument("--corridor", type=str, default=None, help="Corridor XML fixe (défaut: selon config)")
     parser.add_argument("--episodes", type=int, default=5)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--show-vision", action="store_true")
@@ -269,4 +382,4 @@ if __name__ == "__main__":
         model_path = models[0]
         print(f"Auto-détecté: {model_path}\n")
     
-    test(model_path, args.episodes, args.render, args.show_vision, args.corridor)
+    test(model_path, args.episodes, args.render, args.show_vision, args.config, args.corridor)

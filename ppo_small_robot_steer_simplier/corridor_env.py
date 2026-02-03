@@ -633,16 +633,18 @@ class CorridorEnv(gym.Env):
             print(f"DEBUG_TERM: fell_deep at step {self.step_count}, pos=({x:.3f},{y:.3f},{z:.3f})")
             return -10.0, True, info
         
-        # Collision désactivée - le robot peut passer à travers les bumps
-        # if self._is_colliding_with_bump():
-        #     info['reason'] = 'collision'
-        #     print(f"DEBUG_TERM: collision at step {self.step_count}, pos=({x:.3f},{y:.3f},{z:.3f})")
-        #     return -10.0, True, info
+        # Collision désactivée pour terminaison, mais pénalité légère appliquée
+        collision_penalty = 0.0
+        if self._is_colliding_with_bump():
+            collision_penalty = -0.01  # Petite pénalité par step de collision
+            # Debug optionnel (commenté pour éviter le spam)
+            # print(f"DEBUG: collision penalty at step {self.step_count}, pos=({x:.3f},{y:.3f},{z:.3f})")
         
-        # Récompense SIMPLE: progression réduite
+        # Récompense SIMPLE: progression + pénalité collision
         delta_x = x - self.prev_x
         self.prev_x = x
-        reward = delta_x * 2.0  # Récompense réduite de 10 à 2 par mètre
+        progress_reward = delta_x * 2.0  # 2 points par mètre de progression
+        reward = progress_reward + collision_penalty  # Combiner progression et pénalité
         
         info['reason'] = None
         return reward, terminated, info
