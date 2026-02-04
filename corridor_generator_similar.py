@@ -103,12 +103,28 @@ class CorridorGenerator:
         return tiles
     
     def generate_corridor_xml(self, length: float = 100.0, width: float = 3.0, 
-                            seed: int = None, name: str = "generated_corridor") -> str:
-        """Génère le XML complet du corridor."""
+                            seed: int = None, name: str = "generated_corridor",
+                            obstacle_type: str = "both") -> str:
+        """Génère le XML complet du corridor.
         
-        # Générer les patterns
-        bumps = self.generate_bump_pattern(length, seed)
-        holes = self.generate_hole_pattern(length, seed)
+        Args:
+            length: Longueur du corridor en mètres
+            width: Largeur du corridor en mètres  
+            seed: Seed pour la génération aléatoire
+            name: Nom du corridor
+            obstacle_type: Type d'obstacles ("holes", "bumps", "both")
+        """
+        
+        # Générer les patterns selon le type d'obstacles
+        bumps = []
+        holes = []
+        
+        if obstacle_type in ["bumps", "both"]:
+            bumps = self.generate_bump_pattern(length, seed)
+        
+        if obstacle_type in ["holes", "both"]:
+            holes = self.generate_hole_pattern(length, seed)
+        
         floor_tiles = self.generate_floor_tiles(length, width)
         
         # Créer l'élément racine
@@ -212,14 +228,29 @@ class CorridorGenerator:
         lines = [line for line in formatted_xml.split('\n') if line.strip()]
         return '\n'.join(lines)
     
-    def save_corridor(self, filename: str, length: float = 100.0, width: float = 3.0, seed: int = None):
-        """Sauvegarde un corridor généré."""
-        xml_content = self.generate_corridor_xml(length, width, seed, filename.replace('.xml', ''))
+    def save_corridor(self, filename: str, length: float = 100.0, width: float = 3.0, 
+                     seed: int = None, obstacle_type: str = "both"):
+        """Sauvegarde un corridor généré.
+        
+        Args:
+            filename: Nom du fichier XML
+            length: Longueur du corridor en mètres
+            width: Largeur du corridor en mètres
+            seed: Seed pour la génération aléatoire
+            obstacle_type: Type d'obstacles ("holes", "bumps", "both")
+        """
+        xml_content = self.generate_corridor_xml(length, width, seed, filename.replace('.xml', ''), obstacle_type)
         
         with open(filename, 'w') as f:
             f.write(xml_content)
         
-        print(f"Corridor sauvegardé: {filename}")
+        obstacle_desc = {
+            "holes": "trous seulement",
+            "bumps": "bumps seulement", 
+            "both": "trous et bumps"
+        }
+        
+        print(f"Corridor sauvegardé: {filename} ({obstacle_desc.get(obstacle_type, obstacle_type)})")
         return filename
 
 

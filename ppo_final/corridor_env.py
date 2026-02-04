@@ -114,20 +114,33 @@ class CorridorEnv(gym.Env):
     
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
     
-    def __init__(self, max_steps=3000, corridor_xml="corridor_3x100_no_full_obstacles.xml"):
+    def __init__(self, max_steps=3000, corridor_xml="corridor_3x100_no_full_obstacles.xml", obstacle_type="both", use_fixed_seed=False, random_percentage=None):
         super().__init__()
         
         self.robot_xml = "four_wheel_robot.xml"
         self.corridor_xml = corridor_xml
         self.use_random_corridor = corridor_xml is None
+        self.obstacle_type = obstacle_type  # "holes", "bumps", "both"
+        self.use_fixed_seed = use_fixed_seed  # True = seed fixe, False = seed aléatoire
+        self.random_percentage = random_percentage  # Pourcentage pour relancer le dé à chaque reset
+        
+        # Créer un générateur aléatoire indépendant pour cet environnement
+        import random
+        import time
+        import os
+        # Utiliser PID + temps + adresse mémoire pour avoir un seed unique par environnement
+        unique_seed = hash((os.getpid(), time.time(), id(self))) % (2**32)
+        self.env_random = random.Random(unique_seed)
         
         if self.use_random_corridor:
             # Générer premier corridor aléatoire avec le nouveau système
             from corridor_generator_similar import CorridorGenerator
             self.corridor_generator = CorridorGenerator()
+            self.current_corridor_type = f"{self.obstacle_type}-unknown"  # Initialiser
             self.model = self._build_model_from_new_generator()
         else:
             # Utiliser corridor XML fixe
+            self.current_corridor_type = f"{self.obstacle_type}-fixed"  # Initialiser
             self.model = self._build_model_from_xml(corridor_xml)
         
         self.data = mujoco.MjData(self.model)
@@ -344,18 +357,46 @@ class CorridorEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         
+        # Décider si on génère un nouveau corridor ou on réutilise le modèle existant
+        should_generate_new_corridor = False
+        use_fixed_seed_for_generation = False
+        
         if self.use_random_corridor:
-            # Générer un nouveau corridor aléatoire à chaque reset avec le NOUVEAU système
+            # Cas 1: Toujours générer aléatoirement (obstacle_type="both" ou pas de random_percentage)
+            if self.random_percentage is None or self.obstacle_type == "both":
+                should_generate_new_corridor = True
+                use_fixed_seed_for_generation = self.use_fixed_seed
+            else:
+                # Cas 2: Décider selon random_percentage (obstacle_type="holes" ou "bumps")
+                dice_roll = self.env_random.random()  # Utiliser le générateur indépendant
+                use_random_this_reset = dice_roll < self.random_percentage
+                
+                if use_random_this_reset:
+                    # Générer un corridor aléatoire (nouveau à chaque fois)
+                    should_generate_new_corridor = True
+                    use_fixed_seed_for_generation = False  # Random seed
+                else:
+                    # Utiliser un corridor fixe (même modèle à chaque reset)
+                    # Générer seulement si c'est le premier reset ou si on n'a pas encore de modèle fixe
+                    if not hasattr(self, '_fixed_model_generated'):
+                        should_generate_new_corridor = True
+                        use_fixed_seed_for_generation = True   # Fixed seed
+                        self._fixed_model_generated = True
+                    else:
+                        should_generate_new_corridor = False  # Réutiliser le modèle existant
+        
+        if should_generate_new_corridor:
+            # Générer un nouveau corridor
             if hasattr(self, 'corridor_generator'):
-                # Utiliser le nouveau générateur
-                self.model = self._build_model_from_new_generator()
+                # Utiliser le nouveau générateur avec la décision prise
+                self.model = self._build_model_from_new_generator(use_fixed_seed_for_generation)
                 self.data = mujoco.MjData(self.model)
                 self.cell_map = self._build_cell_map_from_xml()
             
             # Mettre à jour robot_body_id pour le nouveau modèle
             self.robot_body_id = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, 'robot')
         else:
-            # Corridor fixe, juste reset les données
+            # Réutiliser le corridor existant, juste reset les données
             mujoco.mj_resetData(self.model, self.data)
         
         # SPAWN aléatoire normal
@@ -636,7 +677,6 @@ class CorridorEnv(gym.Env):
         # Échec: tombé dans un trou
         if z < self.fell_threshold:
             info['reason'] = 'fell'
-            print(f"DEBUG_TERM: fell at step {self.step_count}, pos=({x:.3f},{y:.3f},{z:.3f})")
             return self.failure_penalty, True, info
         
         # Échec: robot retourné
@@ -644,7 +684,6 @@ class CorridorEnv(gym.Env):
         up_z = 1 - 2 * (quat[1]**2 + quat[2]**2)
         if up_z < 0:
             info['reason'] = 'flipped'
-            print(f"DEBUG_TERM: flipped at step {self.step_count}, pos=({x:.3f},{y:.3f},{z:.3f}), up_z={up_z:.3f}")
             return self.failure_penalty, True, info
         
         # Collision désactivée pour terminaison, mais pénalité légère appliquée
@@ -690,11 +729,14 @@ class CorridorEnv(gym.Env):
         return False
     
     def _get_info(self):
+        corridor_type = getattr(self, 'current_corridor_type', f"{self.obstacle_type}-unknown")
         return {
             'x': float(self.data.qpos[0]),
             'y': float(self.data.qpos[1]),
             'z': float(self.data.qpos[2]),
-            'step': self.step_count
+            'step': self.step_count,
+            'corridor_type': corridor_type.split('-')[0],  # "holes", "bumps", "both"
+            'is_random': 'random' in corridor_type
         }
     
     def _build_cell_map(self):
@@ -706,17 +748,50 @@ class CorridorEnv(gym.Env):
         else:
             return self._build_cell_map_from_xml()
 
-    def _build_model_from_new_generator(self):
+    def _build_model_from_new_generator(self, use_fixed_seed=None):
         """Construire modèle MuJoCo avec robot + corridor généré par le nouveau système."""
         import numpy as np
         
-        # Générer corridor avec paramètres aléatoires
-        seed = np.random.randint(0, 10000)
-        length = np.random.uniform(80.0, 120.0)
-        width = np.random.uniform(2.5, 3.5)
+        # Utiliser le paramètre passé ou la valeur par défaut
+        if use_fixed_seed is None:
+            use_fixed_seed = self.use_fixed_seed
+        
+        # Générer les paramètres du corridor
+        if use_fixed_seed:
+            # Seed fixe pour reproductibilité
+            if self.obstacle_type == "holes":
+                seed = 12345
+                self.current_corridor_type = "holes-fixed"
+            elif self.obstacle_type == "bumps":
+                seed = 67890
+                self.current_corridor_type = "bumps-fixed"
+            else:  # "both"
+                seed = 11111
+                self.current_corridor_type = "both-fixed"
+            
+            length = 100.0
+            width = 3.0
+        else:
+            # Seed aléatoire
+            seed = np.random.randint(0, 10000)
+            length = np.random.uniform(80.0, 120.0)
+            width = np.random.uniform(2.5, 3.5)
+            
+            if self.obstacle_type == "holes":
+                self.current_corridor_type = "holes-random"
+            elif self.obstacle_type == "bumps":
+                self.current_corridor_type = "bumps-random"
+            else:  # "both"
+                self.current_corridor_type = "both-random"
         
         # Générer XML en mémoire (pas de sauvegarde fichier)
-        corridor_xml_str = self.corridor_generator.generate_corridor_xml(length, width, seed, "random_corridor")
+        corridor_xml_str = self.corridor_generator.generate_corridor_xml(
+            length=length, 
+            width=width, 
+            seed=seed, 
+            name="random_corridor", 
+            obstacle_type=self.obstacle_type
+        )
         corridor_root = ET.fromstring(corridor_xml_str)
         
         # Charger robot
@@ -918,6 +993,15 @@ class CorridorEnv(gym.Env):
     def set_max_steps(self, new_max_steps):
         """Ajuster dynamiquement la durée max des épisodes."""
         self.max_steps = new_max_steps
+    
+    def update_curriculum_params(self, random_percentage=None, obstacle_type=None, max_steps=None):
+        """Mettre à jour les paramètres du curriculum pour cet environnement."""
+        if random_percentage is not None:
+            self.random_percentage = random_percentage
+        if obstacle_type is not None:
+            self.obstacle_type = obstacle_type
+        if max_steps is not None:
+            self.max_steps = max_steps
     
     def close(self):
         pass

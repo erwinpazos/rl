@@ -28,153 +28,126 @@ class CorridorGenerator:
         self.hole_spacing_mean = 4.0  # Espacement moyen des trous
         
     def generate_bump_pattern(self, length: float, seed: int = None) -> List[Tuple[float, float]]:
-        """Génère le pattern des bumps - serpentin avec point de départ et direction aléatoires."""
+        """Génère le pattern des bumps basé sur l'analyse."""
         if seed is not None:
             random.seed(seed)
             np.random.seed(seed)
         
         bumps = []
-        x = 2.25  # Position de départ
+        x = 2.25  # Position de départ (observée)
+        y_cycle_pos = 0  # Position dans le cycle Y
         
-        # Pattern serpentin avec point de départ ET direction ALÉATOIRES
-        y_positions = [-1.25, -0.75, -0.25, 0.25, 0.75, 1.25]
-        
-        # Commencer à une position Y aléatoire
-        start_idx = random.randint(0, len(y_positions) - 1)
-        
-        # Direction aléatoire dès le début
-        if start_idx == 0:
-            direction = 1  # Forcé vers la droite si on est tout à gauche
-        elif start_idx == len(y_positions) - 1:
-            direction = -1  # Forcé vers la gauche si on est tout à droite
-        else:
-            direction = random.choice([1, -1])  # Direction vraiment aléatoire
-        
-        current_idx = start_idx
+        # Pattern cyclique observé: -1.25 → -0.75 → -0.25 → 0.25 → 0.75 → 1.25 → 0.75 → 0.25 → ...
+        y_pattern = [
+            -1.25, -0.75, -0.25, 0.25, 0.75, 1.25,  # Montée
+            0.75, 0.25, -0.25, -0.75, -1.25,        # Descente
+        ]
         
         while x < length - 1.0:
-            y = y_positions[current_idx]
+            # Position Y selon le pattern cyclique
+            y = y_pattern[y_cycle_pos % len(y_pattern)]
             bumps.append((x, y))
             
-            # Espacement avec variation
+            # Espacement avec variation (observé: 1-4m, moyenne 2m)
             if random.random() < 0.1:  # 10% de chance de gap plus grand
                 spacing = random.uniform(3.0, 4.0)
             else:
-                spacing = random.uniform(1.5, 2.5)
+                spacing = random.uniform(1.0, 2.5)
             
             x += spacing
-            
-            # Avancer dans le serpentin
-            current_idx += direction
-            
-            # Inverser direction aux extrêmes
-            if current_idx >= len(y_positions):
-                current_idx = len(y_positions) - 2
-                direction = -1
-            elif current_idx < 0:
-                current_idx = 1
-                direction = 1
+            y_cycle_pos += 1
         
         return bumps
     
     def generate_hole_pattern(self, length: float, seed: int = None) -> List[Tuple[float, float]]:
-        """Génère le pattern des trous avec positions aléatoires."""
+        """Génère le pattern des trous basé sur l'analyse."""
         if seed is not None:
             random.seed(seed + 1000)  # Seed différent pour les trous
         
         holes = []
+        x = 3.0  # Position de départ plus tôt (au lieu de 6.25)
+        y_cycle_pos = 0
         
-        # Positions Y possibles pour les trous
-        y_positions = [-0.5, 0.5, 1.0]
+        # Pattern cyclique observé: -0.5 → 0.5 → 1.0 → -0.5 → ...
+        y_pattern = [-0.5, 0.5, 1.0]
         
-        # Approche plus robuste: générer des trous à intervalles plus réguliers
-        # Basé sur l'analyse: 15 trous sur 100m = 1 trou tous les ~6.7m en moyenne
-        target_holes = max(8, int(length / 7.0))  # Au moins 8 trous, ou 1 tous les 7m
-        
-        # GARANTIR des trous dans les premiers 20m (zone de test du visualizer)
-        early_holes = max(2, target_holes // 4)  # Au moins 2 trous dans les premiers 20m
-        
-        # Diviser le corridor en 2 zones: début (0-20m) et reste (20m-fin)
-        early_zone_end = min(20.0, length * 0.3)  # 20m ou 30% du corridor
-        
-        # Zone 1: Premiers 20m - garantir des trous visibles
-        start_x = 6.25
-        for i in range(early_holes):
-            x = start_x + i * (early_zone_end - start_x) / early_holes
-            # Variation aléatoire ±1m
-            x += random.uniform(-1.0, 1.0)
-            x = max(start_x, min(early_zone_end - 1.0, x))  # Garder dans la zone
-            
-            y = random.choice(y_positions)
+        while x < length - 2.0:
+            # Position Y selon le pattern cyclique
+            y = y_pattern[y_cycle_pos % len(y_pattern)]
             holes.append((x, y))
-        
-        # Zone 2: Reste du corridor
-        remaining_holes = target_holes - early_holes
-        if remaining_holes > 0:
-            segment_length = (length - 5.0 - early_zone_end) / remaining_holes
             
-            for i in range(remaining_holes):
-                segment_start = early_zone_end + i * segment_length
-                segment_end = early_zone_end + (i + 1) * segment_length
-                
-                # Variation aléatoire dans le segment
-                variation = segment_length * 0.3
-                x = random.uniform(
-                    max(segment_start, segment_start + variation),
-                    min(segment_end, segment_end - variation)
-                )
-                
-                y = random.choice(y_positions)
-                holes.append((x, y))
+            # Espacement réduit pour plus de densité
+            if random.random() < 0.08:  # 8% de chance de gap plus grand (réduit de 15%)
+                spacing = random.uniform(5.0, 7.0)  # Gaps plus petits (au lieu de 8-12m)
+            else:
+                spacing = random.uniform(2.0, 3.0)  # Espacement de base réduit (au lieu de 4m fixe)
+            
+            x += spacing
+            y_cycle_pos += 1
         
         return holes
     
-    def generate_floor_tiles(self, length: float, width: float, holes: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
-        """Génère toutes les tuiles de sol selon le pattern original, SAUF aux positions des trous.
-        
-        IMPORTANT: Les trous sont des ABSENCES de sol, pas des overlays visuels.
-        Un trou de 0.25×0.5 centré sur (x, y) supprime les tuiles de sol à:
-        - (x, y-0.25) et (x, y+0.25)
-        """
+    def generate_floor_tiles(self, length: float, width: float) -> List[Tuple[float, float]]:
+        """Génère toutes les tuiles de sol."""
         tiles = []
         
-        # Pattern original : positions Y de -1.25 à +1.25 par pas de 0.5
-        # X de 0.25 à length par pas de 0.5
+        # Grille basée sur cell_size = 0.5m
+        # Positions centrées sur 0.25, 0.75, 1.25, etc.
         x_positions = np.arange(0.25, length, 0.5)
-        y_positions = [-1.25, -0.75, -0.25, 0.25, 0.75, 1.25]  # 6 positions Y exactes
+        y_positions = np.arange(-width/2 + 0.25, width/2, 0.5)
         
-        # Créer set des positions de trous pour vérification rapide
-        hole_positions = set()
-        for hole_x, hole_y in holes:
-            # IMPORTANT: Arrondir les positions des trous à la grille des tuiles
-            # Les tuiles sont à X = 0.25, 0.75, 1.25, ... (pas de 0.5)
-            # Les trous peuvent être à des positions flottantes, il faut les mapper à la grille
-            grid_x = round(hole_x / 0.5) * 0.5 + 0.25  # Arrondir à la grille des tuiles
-            
-            # Un trou de taille 0.25×0.5 centré sur hole_y supprime 2 tuiles de sol
-            # Exemple: trou à (6.25, -0.5) supprime tuiles à (6.25, -0.75) et (6.25, -0.25)
-            tile_y1 = hole_y - 0.25  # Tuile du bas
-            tile_y2 = hole_y + 0.25  # Tuile du haut
-            hole_positions.add((round(grid_x, 2), round(tile_y1, 2)))
-            hole_positions.add((round(grid_x, 2), round(tile_y2, 2)))
-        
-        # Générer toutes les tuiles SAUF celles supprimées par les trous
         for x in x_positions:
             for y in y_positions:
-                # Vérifier si cette position est supprimée par un trou
-                if (round(x, 2), round(y, 2)) not in hole_positions:
-                    tiles.append((x, y))
+                tiles.append((x, y))
         
         return tiles
     
     def generate_corridor_xml(self, length: float = 100.0, width: float = 3.0, 
-                            seed: int = None, name: str = "generated_corridor") -> str:
-        """Génère le XML complet du corridor."""
+                            seed: int = None, name: str = "generated_corridor",
+                            obstacle_type: str = "both") -> str:
+        """Génère le XML complet du corridor.
         
-        # Générer les patterns
-        bumps = self.generate_bump_pattern(length, seed)
-        holes = self.generate_hole_pattern(length, seed)
-        floor_tiles = self.generate_floor_tiles(length, width, holes)  # Passer les trous pour les exclure
+        Args:
+            length: Longueur du corridor en mètres
+            width: Largeur du corridor en mètres  
+            seed: Seed pour la génération aléatoire
+            name: Nom du corridor
+            obstacle_type: Type d'obstacles ("holes", "bumps", "both")
+        """
+        
+        # Générer les patterns selon le type d'obstacles
+        bumps = []
+        holes = []
+        
+        if obstacle_type in ["bumps", "both"]:
+            bumps = self.generate_bump_pattern(length, seed)
+        
+        if obstacle_type in ["holes", "both"]:
+            holes = self.generate_hole_pattern(length, seed)
+        
+        floor_tiles = self.generate_floor_tiles(length, width)
+        
+        # NOUVEAU: Supprimer les tuiles de sol aux positions des trous pour créer de vrais trous
+        if holes:
+            filtered_floor_tiles = []
+            for tile_x, tile_y in floor_tiles:
+                # Vérifier si cette tuile est dans une zone de trou
+                is_in_hole = False
+                for hole_x, hole_y in holes:
+                    # Distance entre la tuile et le centre du trou
+                    dx = abs(tile_x - hole_x)
+                    dy = abs(tile_y - hole_y)
+                    
+                    # Si la tuile est dans la zone du trou (hole_size = 0.25 x 0.5)
+                    if dx <= self.hole_size[0] and dy <= self.hole_size[1]:
+                        is_in_hole = True
+                        break
+                
+                # Garder seulement les tuiles qui ne sont pas dans un trou
+                if not is_in_hole:
+                    filtered_floor_tiles.append((tile_x, tile_y))
+            
+            floor_tiles = filtered_floor_tiles
         
         # Créer l'élément racine
         root = ET.Element('mujoco')
@@ -213,29 +186,29 @@ class CorridorGenerator:
         # Worldbody
         worldbody = ET.SubElement(root, 'worldbody')
         
-        # Murs (positions exactes de l'original)
+        # Murs (basés sur l'analyse)
         wall_thickness = 0.025
         wall_height = 2.5
         wall_length = length / 2
         wall_center_x = length / 2
         
-        # Mur gauche (Y = -1.525)
+        # Mur gauche
         wall_left = ET.SubElement(worldbody, 'geom')
         wall_left.set('name', 'wall_left')
         wall_left.set('type', 'box')
         wall_left.set('size', f'{wall_length:.3f} {wall_thickness:.3f} {wall_height:.3f}')
-        wall_left.set('pos', f'{wall_center_x:.3f} -1.525 {wall_height:.3f}')
+        wall_left.set('pos', f'{wall_center_x:.3f} {-width/2 - wall_thickness:.3f} {wall_height:.3f}')
         wall_left.set('material', 'mat_wall')
         
-        # Mur droit (Y = +1.525)
+        # Mur droit
         wall_right = ET.SubElement(worldbody, 'geom')
         wall_right.set('name', 'wall_right')
         wall_right.set('type', 'box')
         wall_right.set('size', f'{wall_length:.3f} {wall_thickness:.3f} {wall_height:.3f}')
-        wall_right.set('pos', f'{wall_center_x:.3f} 1.525 {wall_height:.3f}')
+        wall_right.set('pos', f'{wall_center_x:.3f} {width/2 + wall_thickness:.3f} {wall_height:.3f}')
         wall_right.set('material', 'mat_wall')
         
-        # Tuiles de sol (AVEC ABSENCES pour les trous - c'est ça le secret!)
+        # Tuiles de sol (avec trous créés par suppression de tuiles)
         for i, (x, y) in enumerate(floor_tiles):
             tile = ET.SubElement(worldbody, 'geom')
             tile.set('type', 'box')
@@ -243,19 +216,6 @@ class CorridorGenerator:
             tile.set('name', f'floor_flat_{i}')
             tile.set('size', f'{self.floor_tile_size[0]:.3f} {self.floor_tile_size[1]:.3f} {self.floor_tile_size[2]:.3f}')
             tile.set('pos', f'{x:.3f} {y:.3f} {self.floor_tile_size[2]:.3f}')
-        
-        # Trous (géométries VISUELLES invisibles pour marquer les positions, OPTIONNEL)
-        # Les vrais trous sont les ABSENCES de tuiles de sol ci-dessus
-        for i, (x, y) in enumerate(holes):
-            hole = ET.SubElement(worldbody, 'geom')
-            hole.set('name', f'floor_hole_tile_{i}')
-            hole.set('type', 'box')
-            hole.set('size', f'{self.hole_size[0]:.3f} {self.hole_size[1]:.3f} {self.hole_size[2]:.3f}')  # 0.25 × 0.5 × 0.025
-            hole.set('pos', f'{x:.3f} {y:.3f} {self.hole_size[2]:.3f}')
-            hole.set('group', '5')  # Invisible (comme dans l'original)
-            hole.set('contype', '0')  # Pas de collision
-            hole.set('conaffinity', '0')  # Pas d'affinité
-            hole.set('rgba', '0.8 0.4 0.2 0.5')  # Couleur orange transparente
         
         # Bumps
         for i, (x, y) in enumerate(bumps):
@@ -278,14 +238,29 @@ class CorridorGenerator:
         lines = [line for line in formatted_xml.split('\n') if line.strip()]
         return '\n'.join(lines)
     
-    def save_corridor(self, filename: str, length: float = 100.0, width: float = 3.0, seed: int = None):
-        """Sauvegarde un corridor généré."""
-        xml_content = self.generate_corridor_xml(length, width, seed, filename.replace('.xml', ''))
+    def save_corridor(self, filename: str, length: float = 100.0, width: float = 3.0, 
+                     seed: int = None, obstacle_type: str = "both"):
+        """Sauvegarde un corridor généré.
+        
+        Args:
+            filename: Nom du fichier XML
+            length: Longueur du corridor en mètres
+            width: Largeur du corridor en mètres
+            seed: Seed pour la génération aléatoire
+            obstacle_type: Type d'obstacles ("holes", "bumps", "both")
+        """
+        xml_content = self.generate_corridor_xml(length, width, seed, filename.replace('.xml', ''), obstacle_type)
         
         with open(filename, 'w') as f:
             f.write(xml_content)
         
-        print(f"Corridor sauvegardé: {filename}")
+        obstacle_desc = {
+            "holes": "trous seulement",
+            "bumps": "bumps seulement", 
+            "both": "trous et bumps"
+        }
+        
+        print(f"Corridor sauvegardé: {filename} ({obstacle_desc.get(obstacle_type, obstacle_type)})")
         return filename
 
 

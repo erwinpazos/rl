@@ -306,8 +306,8 @@ class Agent(nn.Module):
         )
 
 
-def make_env(config=None, random_percentage=None, curriculum_max_steps=None):
-    """Factory pour environnement avec curriculum de corridors aléatoires et max_steps."""
+def make_env(config=None, random_percentage=None, curriculum_max_steps=None, obstacle_type=None):
+    """Factory pour environnement avec curriculum de corridors aléatoires, max_steps et obstacle types."""
     def thunk():
         if config and 'environment' in config:
             env_config = config['environment']
@@ -322,6 +322,9 @@ def make_env(config=None, random_percentage=None, curriculum_max_steps=None):
         # Utiliser curriculum_max_steps si fourni, sinon base_max_steps
         max_steps = curriculum_max_steps if curriculum_max_steps is not None else base_max_steps
         
+        # Utiliser obstacle_type par défaut si pas fourni
+        env_obstacle_type = obstacle_type if obstacle_type is not None else "both"
+        
         # Curriculum: décider si cet environnement utilise un corridor aléatoire ou fixe
         if use_random_base and random_percentage is not None:
             # Utiliser le pourcentage du curriculum
@@ -330,10 +333,21 @@ def make_env(config=None, random_percentage=None, curriculum_max_steps=None):
             # Utiliser la configuration de base
             use_random_this_env = use_random_base
         
-        # Utiliser corridor_xml=None pour générer aléatoirement EN MÉMOIRE
-        corridor_xml = None if use_random_this_env else corridor_xml_file
+        # NOUVEAU: Si obstacle_type n'est pas "both", utiliser le générateur
+        # mais respecter le pourcentage de corridors aléatoires
+        if env_obstacle_type != "both":
+            # Forcer l'utilisation du générateur pour les types d'obstacles spécifiques
+            corridor_xml = None
+            # Passer le random_percentage pour que l'env relance le dé à chaque reset
+            env_random_percentage = random_percentage
+            use_fixed_seed = False  # Pas utilisé, la décision se fait dans l'env
+        else:
+            # Utiliser corridor_xml=None pour générer aléatoirement EN MÉMOIRE
+            corridor_xml = None if use_random_this_env else corridor_xml_file
+            env_random_percentage = None
+            use_fixed_seed = False  # Pas utilisé pour "both"
             
-        env = CorridorEnv(max_steps=max_steps, corridor_xml=corridor_xml)
+        env = CorridorEnv(max_steps=max_steps, corridor_xml=corridor_xml, obstacle_type=env_obstacle_type, use_fixed_seed=use_fixed_seed, random_percentage=env_random_percentage)
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env = gym.wrappers.ClipAction(env)
         return env
@@ -364,6 +378,30 @@ def get_curriculum_random_percentage(config, iteration):
     return current_percentage
 
 
+def get_curriculum_obstacle_type(config, iteration):
+    """Obtenir le type d'obstacles selon le curriculum."""
+    if not config or 'curriculum' not in config:
+        return None
+    
+    curriculum_config = config['curriculum']
+    if not curriculum_config.get('enabled', False):
+        return None
+    
+    schedule = curriculum_config.get('obstacle_type_schedule', [])
+    if not schedule:
+        return None
+    
+    # Trouver le bon type d'obstacles selon l'itération actuelle
+    current_obstacle_type = "both"  # Valeur par défaut
+    for stage in schedule:
+        if iteration >= stage['iteration']:
+            current_obstacle_type = stage['obstacle_type']
+        else:
+            break
+    
+    return current_obstacle_type
+
+
 def get_curriculum_max_steps(config, iteration):
     """Obtenir le nombre de steps max selon le curriculum."""
     if not config or 'curriculum' not in config:
@@ -389,7 +427,7 @@ def get_curriculum_max_steps(config, iteration):
 
 
 def update_curriculum(envs, debug_env, iteration, num_iterations, config=None):
-    """Curriculum learning avec pourcentage de corridors aléatoires et steps max."""
+    """Curriculum learning avec pourcentage de corridors aléatoires, steps max et types d'obstacles."""
     
     # Curriculum de corridors aléatoires
     random_percentage = get_curriculum_random_percentage(config, iteration)
@@ -403,31 +441,72 @@ def update_curriculum(envs, debug_env, iteration, num_iterations, config=None):
         else:
             current_steps = 4000
     
-    if random_percentage is not None or current_steps != 4000:
+    # Curriculum de types d'obstacles
+    obstacle_type = get_curriculum_obstacle_type(config, iteration)
+    
+    if random_percentage is not None or current_steps != 4000 or obstacle_type is not None:
         # Afficher le curriculum actuel
         curriculum_info = f"CURRICULUM (iteration {iteration}):"
         if random_percentage is not None:
             curriculum_info += f" Random corridors: {random_percentage*100:.0f}%"
         curriculum_info += f" Max steps: {current_steps}"
+        if obstacle_type is not None:
+            obstacle_desc = {"holes": "trous seulement", "bumps": "bumps seulement", "both": "trous et bumps"}
+            curriculum_info += f" Obstacles: {obstacle_desc.get(obstacle_type, obstacle_type)}"
         print(curriculum_info)
     
-    # Note: max_steps are applied when environments are created/reset
-    # Dynamic updates during training are not necessary since episodes 
-    # naturally use the current curriculum values on reset
+    # CRITICAL FIX: Actually update environment parameters
+    # Update max_steps for all environments
+    if hasattr(envs, 'envs'):
+        for env_wrapper in envs.envs:
+            if hasattr(env_wrapper, 'env') and hasattr(env_wrapper.env, 'set_max_steps'):
+                env_wrapper.env.set_max_steps(current_steps)
+            elif hasattr(env_wrapper, 'set_max_steps'):
+                env_wrapper.set_max_steps(current_steps)
     
-    return current_steps, random_percentage
+    # Update curriculum parameters for environments that support it
+    if hasattr(envs, 'envs'):
+        for env_wrapper in envs.envs:
+            env = env_wrapper.env if hasattr(env_wrapper, 'env') else env_wrapper
+            if hasattr(env, 'update_curriculum_params'):
+                env.update_curriculum_params(
+                    random_percentage=random_percentage,
+                    obstacle_type=obstacle_type,
+                    max_steps=current_steps
+                )
+    
+    # Update debug environment too
+    if hasattr(debug_env, 'set_max_steps'):
+        debug_env.set_max_steps(current_steps)
+    if hasattr(debug_env, 'update_curriculum_params'):
+        debug_env.update_curriculum_params(
+            random_percentage=random_percentage,
+            obstacle_type=obstacle_type,
+            max_steps=current_steps
+        )
+    
+    return current_steps, random_percentage, obstacle_type
 
 
-def debug_render_episode(agent, debug_env, device, max_steps=None):
+def debug_render_episode(agent, debug_env, device, max_steps=None, current_obstacle_type=None):
     """Render un épisode de debug pour voir ce qui se passe."""
     print("\nDEBUG: Rendering episode visualization...")
     
+    # Si un type d'obstacles spécifique est fourni, créer un nouvel environnement temporaire
+    if current_obstacle_type and current_obstacle_type != "both":
+        print(f"DEBUG: Creating temporary environment with obstacle_type='{current_obstacle_type}'")
+        from corridor_env import CorridorEnv
+        temp_debug_env = CorridorEnv(max_steps=max_steps or 3000, corridor_xml=None, obstacle_type=current_obstacle_type, use_fixed_seed=True, random_percentage=None)
+        env_to_use = temp_debug_env
+    else:
+        env_to_use = debug_env
+    
     # Reset AVANT de créer le viewer (génère nouveau corridor + nouveau modèle)
-    obs, _ = debug_env.reset()
+    obs, _ = env_to_use.reset()
     
     # Maintenant utiliser le nouveau modèle/data
-    m = debug_env.model
-    d = debug_env.data
+    m = env_to_use.model
+    d = env_to_use.data
     robot_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'robot')
     
     try:
@@ -444,9 +523,9 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
             
             # Utiliser le max_steps de l'environnement si pas spécifié
             if max_steps is None:
-                max_steps = debug_env.max_steps
+                max_steps = env_to_use.max_steps
             
-            print(f"Position initiale: x={debug_env.data.qpos[0]:.2f}, y={debug_env.data.qpos[1]:.2f}")
+            print(f"Position initiale: x={env_to_use.data.qpos[0]:.2f}, y={env_to_use.data.qpos[1]:.2f}")
             print(f"Max steps pour cet épisode: {max_steps}")
             
             while not done and v.is_running() and step < max_steps:
@@ -456,56 +535,59 @@ def debug_render_episode(agent, debug_env, device, max_steps=None):
                     action, _, _, _ = agent.get_action_and_value(obs_t)
                     action = action.cpu().numpy()[0]
                 
-                obs, reward, term, trunc, info = debug_env.step(action)
+                obs, reward, term, trunc, info = env_to_use.step(action)
                 done = term or trunc
                 ep_return += reward
                 step += 1
                 
                 # Afficher info + vision
                 if step % 25 == 0:
-                    x = debug_env.data.qpos[0]
-                    stabilizing = " (STABILISATION)" if step < debug_env.stabilization_steps else ""
+                    x = env_to_use.data.qpos[0]
+                    stabilizing = " (STABILISATION)" if step < env_to_use.stabilization_steps else ""
                     print(f"Step {step}: x={x:.2f}m, reward={reward:.3f}, return={ep_return:.1f}{stabilizing}")
                     
                     # Décoder l'observation SIMPLIFIÉE AVEC HISTORIQUE RÉDUIT
                     robot_state = obs[:7]  # pos(3) + vel(3) + angle(1)
-                    history_simplified = obs[7:7+debug_env.history_dim].reshape(debug_env.history_length, 6)  # frames × 6 valeurs
-                    grid = obs[7+debug_env.history_dim:].reshape(debug_env.grid_rows, debug_env.grid_cols, 2)  # Grille dynamique×2
+                    # history_simplified = obs[7:7+env_to_use.history_dim].reshape(env_to_use.history_length, 6)  # frames × 6 valeurs
+                    # grid = obs[7+env_to_use.history_dim:].reshape(env_to_use.grid_rows, env_to_use.grid_cols, 2)  # Grille dynamique×2
                     
                     print(f"  Robot: pos=({robot_state[0]:.2f}, {robot_state[1]:.2f}, {robot_state[2]:.2f}), vel=({robot_state[3]:.2f}, {robot_state[4]:.2f}, {robot_state[5]:.2f}), angle={robot_state[6]:.2f}rad ({np.degrees(robot_state[6]):.1f}°)")
                     
-                    # Afficher historique simplifié (dernière frame)
-                    last_frame = history_simplified[-1]  # 6 valeurs: pos(3) + vel(3)
-                    last_pos = last_frame[:3]
-                    last_vel = last_frame[3:]
-                    print(f"  Historique (4 frames): dernière pos=({last_pos[0]:+.2f}, {last_pos[1]:+.2f}, {last_pos[2]:+.2f}), vel=({last_vel[0]:+.2f}, {last_vel[1]:+.2f}, {last_vel[2]:+.2f})")
+                    # # Afficher historique simplifié (dernière frame)
+                    # last_frame = history_simplified[-1]  # 6 valeurs: pos(3) + vel(3)
+                    # last_pos = last_frame[:3]
+                    # last_vel = last_frame[3:]
+                    # print(f"  Historique (4 frames): dernière pos=({last_pos[0]:+.2f}, {last_pos[1]:+.2f}, {last_pos[2]:+.2f}), vel=({last_vel[0]:+.2f}, {last_vel[1]:+.2f}, {last_vel[2]:+.2f})")
                     
-                    # Afficher grille (20 lignes × TOUTE la largeur 30 colonnes) - Canal 0 (obstacles)
-                    obstacles_grid = grid[:, :, 0]  # Canal obstacles
-                    trous_grid = grid[:, :, 1]      # Canal trous
+                    # # Afficher grille (20 lignes × TOUTE la largeur 30 colonnes) - Canal 0 (obstacles)
+                    # obstacles_grid = grid[:, :, 0]  # Canal obstacles
+                    # trous_grid = grid[:, :, 1]      # Canal trous
                     
-                    print(f"  GRILLE (lignes 0-{debug_env.grid_rows-1}, EGO-CENTRIQUE - tourne avec robot):")
-                    for i in range(min(debug_env.grid_rows, 20)):  # Limiter l'affichage à 20 lignes max
-                        line = "    "
-                        for j in range(min(debug_env.grid_cols, 40)):  # Limiter l'affichage à 40 colonnes max
-                            if obstacles_grid[i, j] > 0.5:
-                                line += '#'  # Obstacle (bump)
-                            elif trous_grid[i, j] > 0.5:
-                                line += '.'  # Trou
-                            else:
-                                line += '/'  # Sol
-                        relative_dist = (i - debug_env.robot_row_in_grid) * debug_env.cell_size  # Distance relative au robot
-                        print(f"    {relative_dist:+.1f}m: {line}")
-                    print("    (/=floor, #=obstacle/bump, .=hole)")
-                    print("    (EGO-CENTRIC grid: rotates with robot, 'forward' = always up)")
-                    print(f"    (Vision: {debug_env.vision_length}m x {debug_env.vision_width}m, {debug_env.cell_size}m cells)")
+                    # print(f"  GRILLE (lignes 0-{env_to_use.grid_rows-1}, EGO-CENTRIQUE - tourne avec robot):")
+                    # for i in range(min(env_to_use.grid_rows, 20)):  # Limiter l'affichage à 20 lignes max
+                    #     line = "    "
+                    #     for j in range(min(env_to_use.grid_cols, 40)):  # Limiter l'affichage à 40 colonnes max
+                    #         if obstacles_grid[i, j] > 0.5:
+                    #             line += '#'  # Obstacle (bump)
+                    #         elif trous_grid[i, j] > 0.5:
+                    #             line += '.'  # Trou
+                    #         else:
+                    #             line += '/'  # Sol
+                    #     relative_dist = (i - env_to_use.robot_row_in_grid) * env_to_use.cell_size  # Distance relative au robot
+                    #     print(f"    {relative_dist:+.1f}m: {line}")
+                    # print("    (/=floor, #=obstacle/bump, .=hole)")
+                    # print("    (EGO-CENTRIC grid: rotates with robot, 'forward' = always up)")
+                    # print(f"    (Vision: {env_to_use.vision_length}m x {env_to_use.vision_width}m, {env_to_use.cell_size}m cells)")
                 
                 v.sync()
                 time.sleep(0.05)  # 20 FPS
             
-            final_x = debug_env.data.qpos[0]
+            final_x = env_to_use.data.qpos[0]
             reason = info.get('reason', 'truncated')
-            print(f"Episode ended: {reason} | Steps: {step} | Distance: {final_x:.2f}m | Reward: {ep_return:.1f}")
+            corridor_type = info.get('corridor_type', 'unknown')
+            is_random = info.get('is_random', False)
+            random_str = "random" if is_random else "fixed"
+            print(f"Episode ended: {reason} | Steps: {step} | Distance: {final_x:.2f}m | Reward: {ep_return:.1f} | Corridor: {corridor_type}-{random_str}")
             
             # Attendre un peu pour voir le résultat
             time.sleep(2.0)
@@ -617,14 +699,18 @@ def train(config_path="config.yaml", **kwargs):
     # Curriculum initial (itération 0)
     initial_random_percentage = get_curriculum_random_percentage(config, 0)
     initial_max_steps = get_curriculum_max_steps(config, 0)
+    initial_obstacle_type = get_curriculum_obstacle_type(config, 0)
     
     if initial_random_percentage is not None:
         print(f"CURRICULUM: Starting with {initial_random_percentage*100:.0f}% random corridors")
     if initial_max_steps is not None:
         print(f"CURRICULUM: Starting with {initial_max_steps} max steps per episode")
+    if initial_obstacle_type is not None:
+        obstacle_desc = {"holes": "trous seulement", "bumps": "bumps seulement", "both": "trous et bumps"}
+        print(f"CURRICULUM: Starting with {obstacle_desc.get(initial_obstacle_type, initial_obstacle_type)}")
     
-    # Environnements parallèles avec curriculum de corridors aléatoires ET max_steps
-    envs = gym.vector.AsyncVectorEnv([make_env(config, initial_random_percentage, initial_max_steps) for _ in range(num_envs)])
+    # Environnements parallèles avec curriculum complet
+    envs = gym.vector.AsyncVectorEnv([make_env(config, initial_random_percentage, initial_max_steps, initial_obstacle_type) for _ in range(num_envs)])
     
     # Environnement de debug pour visualisation
     if config and 'environment' in config:
@@ -642,8 +728,18 @@ def train(config_path="config.yaml", **kwargs):
     else:
         debug_max_steps = initial_max_steps if initial_max_steps else 1000
         debug_corridor_xml = None  # Génération aléatoire
-        
-    debug_env = CorridorEnv(max_steps=debug_max_steps, corridor_xml=debug_corridor_xml)
+    
+    debug_obstacle_type = initial_obstacle_type if initial_obstacle_type else "both"
+    
+    # NOUVEAU: Si obstacle_type n'est pas "both", forcer l'utilisation du générateur pour le debug aussi
+    if debug_obstacle_type != "both":
+        debug_corridor_xml = None  # Forcer l'utilisation du générateur
+        # Pour le debug, utiliser seed fixe pour la reproductibilité
+        debug_use_fixed_seed = True
+    else:
+        debug_use_fixed_seed = False
+    
+    debug_env = CorridorEnv(max_steps=debug_max_steps, corridor_xml=debug_corridor_xml, obstacle_type=debug_obstacle_type, use_fixed_seed=debug_use_fixed_seed, random_percentage=initial_random_percentage if debug_obstacle_type != "both" else None)
     
     obs_dim = envs.single_observation_space.shape[0]
     act_dim = envs.single_action_space.shape[0]
@@ -710,7 +806,7 @@ def train(config_path="config.yaml", **kwargs):
     best_return = -float('inf')
     best_distance = 0.0
     successes = 0
-    total_episodes = 0
+    total_episodes = last_batch_episode  # FIXED: Continue from last saved episode instead of 0
     
     # Métriques par batch (configurable) - Charger existantes si disponibles
     batch_metrics, last_batch_episode = load_existing_metrics("models/training_metrics.csv")
@@ -730,8 +826,8 @@ def train(config_path="config.yaml", **kwargs):
     os.makedirs("models", exist_ok=True)
 
     for iteration in range(start_iteration, num_iterations + 1):
-        # === CURRICULUM: Ajuster max_steps et pourcentage de corridors aléatoires ===
-        current_max_steps, random_percentage = update_curriculum(envs, debug_env, iteration, num_iterations, config)
+        # === CURRICULUM: Ajuster max_steps, pourcentage de corridors aléatoires et types d'obstacles ===
+        current_max_steps, random_percentage, obstacle_type = update_curriculum(envs, debug_env, iteration, num_iterations, config)
         
         # === COLLECTE ROLLOUTS (parallèle sur num_envs) ===
         for step in range(num_steps):
@@ -766,6 +862,8 @@ def train(config_path="config.yaml", **kwargs):
                             dist = info.get('x', 0)
                             ret = info.get('episode', {}).get('r', reward[i] if i < len(reward) else 0)
                             steps = info.get('step', 0)
+                            corridor_type = info.get('corridor_type', 'unknown')
+                            is_random = info.get('is_random', False)
                         
                         # Sinon essayer le format vectorisé avec masques
                         elif isinstance(infos, dict):
@@ -805,6 +903,21 @@ def train(config_path="config.yaml", **kwargs):
                                     ret = float(reward[i]) if i < len(reward) else 0.0
                             else:
                                 ret = float(reward[i]) if i < len(reward) else 0.0
+                            
+                            # Récupérer corridor type et random info
+                            corridor_type_list = infos.get('corridor_type', [])
+                            corridor_type_mask = infos.get('_corridor_type', [])
+                            if i < len(corridor_type_list) and i < len(corridor_type_mask) and corridor_type_mask[i]:
+                                corridor_type = corridor_type_list[i]
+                            else:
+                                corridor_type = 'unknown'
+                            
+                            is_random_list = infos.get('is_random', [])
+                            is_random_mask = infos.get('_is_random', [])
+                            if i < len(is_random_list) and i < len(is_random_mask) and is_random_mask[i]:
+                                is_random = is_random_list[i]
+                            else:
+                                is_random = False
                         
                         else:
                             # Fallback complet
@@ -812,6 +925,8 @@ def train(config_path="config.yaml", **kwargs):
                             dist = 0.0
                             ret = float(reward[i]) if i < len(reward) else 0.0
                             steps = 0
+                            corridor_type = 'unknown'
+                            is_random = False
                             
                     except (IndexError, KeyError, TypeError, AttributeError) as e:
                         # Fallback en cas d'erreur
@@ -819,7 +934,15 @@ def train(config_path="config.yaml", **kwargs):
                         dist = 0.0
                         ret = float(reward[i]) if i < len(reward) else 0.0
                         steps = 0
+                        corridor_type = 'unknown'
+                        is_random = False
                         print(f"  WARNING: Episode info extraction failed for env {i}: {e}")
+                    
+                    # Créer un dict info pour le log
+                    info = {
+                        'corridor_type': corridor_type,
+                        'is_random': is_random
+                    }
                     
                     episode_returns.append(ret)
                     episode_distances.append(dist)
@@ -827,8 +950,11 @@ def train(config_path="config.yaml", **kwargs):
                     episode_reasons.append(reason)  # Stocker la raison
                     total_episodes += 1
                     
-                    # Log individuel pour chaque épisode
-                    print(f"Episode {total_episodes}: {reason} | Steps: {steps} | Distance: {dist:.2f}m | Reward: {ret:.1f}")
+                    # Log individuel pour chaque épisode avec type de corridor
+                    corridor_type = info.get('corridor_type', 'unknown')
+                    is_random = info.get('is_random', False)
+                    random_str = "random" if is_random else "fixed"
+                    print(f"Episode {total_episodes}: {reason} | Steps: {steps} | Distance: {dist:.2f}m | Reward: {ret:.1f} | Corridor: {corridor_type}-{random_str}")
                     
                     if ret > best_return:
                         best_return = ret
@@ -947,6 +1073,13 @@ def train(config_path="config.yaml", **kwargs):
             print(f"Max Steps Curriculum: {current_max_steps}")
             if random_percentage is not None:
                 print(f"Random Corridors: {random_percentage*100:.0f}%")
+            if obstacle_type is not None:
+                obstacle_names = {
+                    "holes": "Trous seulement",
+                    "bumps": "Bumps seulement", 
+                    "both": "Trous et bumps"
+                }
+                print(f"Obstacles: {obstacle_names.get(obstacle_type, obstacle_type)}")
             print(f"{'='*70}")
             
             if episode_returns:
@@ -988,7 +1121,7 @@ def train(config_path="config.yaml", **kwargs):
         
         # Debug render
         if iteration % render_interval == 0 or iteration == 1:
-            debug_render_episode(agent, debug_env, device)
+            debug_render_episode(agent, debug_env, device, current_max_steps, obstacle_type)
     
     # === FIN ===
     elapsed = time.time() - start_time
