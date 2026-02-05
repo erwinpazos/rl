@@ -605,7 +605,7 @@ def debug_render_episode(agent, debug_env, device, max_steps=None, current_obsta
             corridor_type = info.get('corridor_type', 'unknown')
             is_random = info.get('is_random', False)
             random_str = "random" if is_random else "fixed"
-            print(f"Episode ended: {reason} | Steps: {step} | Distance: {final_x:.2f}m | Reward: {ep_return:.1f} | Corridor: {corridor_type}-{random_str}")
+            print(f"Episode ended: {reason:<9} | Steps: {step:>3} | Distance: {final_x:>5.2f}m | Reward: {ep_return:>5.1f} | Corridor: {corridor_type}-{random_str}")
             
             # Attendre un peu pour voir le résultat
             time.sleep(2.0)
@@ -972,7 +972,7 @@ def train(config_path="config.yaml", **kwargs):
                     corridor_type = info.get('corridor_type', 'unknown')
                     is_random = info.get('is_random', False)
                     random_str = "random" if is_random else "fixed"
-                    print(f"Episode {total_episodes}: {reason} | Steps: {steps} | Distance: {dist:.2f}m | Reward: {ret:.1f} | Corridor: {corridor_type}-{random_str}")
+                    print(f"Episode {total_episodes:>3}: {reason:<9} | Steps: {steps:>3} | Distance: {dist:>5.2f}m | Reward: {ret:>5.1f} | Corridor: {corridor_type}-{random_str}")
                     
                     if ret > best_return:
                         best_return = ret

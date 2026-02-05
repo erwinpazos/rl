@@ -5,18 +5,18 @@
 training:
   total_timesteps: 8000000  # Nombre total de steps d'entraînement
   num_envs: 32             # Nombre d'environnements parallèles
-  num_steps: 2000          # Steps par rollout par environnement
+  num_steps: 1500          # Steps par rollout par environnement
   num_minibatches: 32      # Nombre de mini-batches pour l'update
   update_epochs: 10        # Nombre d'époques d'optimisation par update
   seed: 1                  # Seed pour la reproductibilité
 
 # Hyperparamètres PPO
 ppo:
-  lr: 0.0004              # Learning rate
-  gamma: 0.997            # Facteur de discount (récompenses futures)
+  lr: 0.0006              # Learning rate
+  gamma: 0.995            # Facteur de discount (récompenses futures)
   gae_lambda: 0.98        # Lambda pour Generalized Advantage Estimation
-  clip_coef: 0.2          # Coefficient de clipping PPO
-  ent_coef: 0.01          # Coefficient d'entropie (exploration)
+  clip_coef: 0.25          # Coefficient de clipping PPO
+  ent_coef: 0.02          # Coefficient d'entropie (exploration)
   vf_coef: 0.5            # Coefficient de la value function loss
   max_grad_norm: 0.5      # Clipping des gradients
 
@@ -95,9 +95,9 @@ curriculum:
   obstacle_type_schedule:
     - iteration: 0         # Itérations 0-9
       obstacle_type: "holes"  # Seulement des trous (plus facile - apprendre à éviter de tomber)
-    - iteration: 30        # Itérations 10-19
+    - iteration: 80        # Itérations 10-19
       obstacle_type: "bumps"  # Seulement des bumps (intermédiaire - apprendre à naviguer)
-    - iteration: 60        # Itérations 20+
+    - iteration: 120        # Itérations 20+
       obstacle_type: "both"   # Trous ET bumps (difficile - combinaison des deux)
 
 # Paramètres physiques du robot (lus automatiquement depuis le XML)
@@ -132,10 +132,10 @@ corridor:
 rewards:
   # Récompenses de terminaison (épisode se termine)
   success_reward: 100.0      # Récompense pour atteindre la fin du corridor
-  failure_penalty: -10.0     # Pénalité pour échecs (fell, flipped)
+  failure_penalty: -5.0     # Pénalité pour échecs (fell, flipped)
   
   # Récompenses continues (à chaque step)
-  progress_multiplier: 2.0   # Multiplicateur pour progression (delta_x * multiplier)
+  progress_multiplier: 5.0   # Multiplicateur pour progression (delta_x * multiplier)
   collision_penalty: -0.01   # Pénalité par step de collision avec bump/wall
   
   # Seuils de détection
