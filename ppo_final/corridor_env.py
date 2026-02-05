@@ -996,12 +996,36 @@ class CorridorEnv(gym.Env):
     
     def update_curriculum_params(self, random_percentage=None, obstacle_type=None, max_steps=None):
         """Mettre à jour les paramètres du curriculum pour cet environnement."""
+        force_regeneration = False
+        
         if random_percentage is not None:
             self.random_percentage = random_percentage
+        
         if obstacle_type is not None:
-            self.obstacle_type = obstacle_type
+            old_obstacle_type = getattr(self, 'obstacle_type', None)
+            if obstacle_type != old_obstacle_type:
+                # Si le type d'obstacles change, forcer la régénération
+                self.obstacle_type = obstacle_type
+                force_regeneration = True
+                
+                # Mettre à jour current_corridor_type immédiatement pour l'affichage
+                if hasattr(self, 'current_corridor_type'):
+                    old_corridor_type = self.current_corridor_type
+                    if 'random' in old_corridor_type:
+                        self.current_corridor_type = f"{obstacle_type}-random"
+                    else:
+                        self.current_corridor_type = f"{obstacle_type}-fixed"
+                else:
+                    self.current_corridor_type = f"{obstacle_type}-unknown"
+            else:
+                self.obstacle_type = obstacle_type
+            
         if max_steps is not None:
             self.max_steps = max_steps
+        
+        # Forcer la régénération du modèle fixe si le type d'obstacles a changé
+        if force_regeneration and hasattr(self, '_fixed_model_generated'):
+            delattr(self, '_fixed_model_generated')
     
     def close(self):
         pass

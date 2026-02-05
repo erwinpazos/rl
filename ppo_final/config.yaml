@@ -67,13 +67,13 @@ curriculum:
   random_corridor_schedule:
     - iteration: 0         # Itération de début
       random_percentage: 0.20  # 20% aléatoire = 80% corridor fixe
-    - iteration: 15        # À partir de l'itération 15 (au lieu de 50)
+    - iteration: 30        # À partir de l'itération 15 (au lieu de 50)
       random_percentage: 0.3 # 30% aléatoire, 70% fixe
-    - iteration: 30        # À partir de l'itération 30 (au lieu de 100)
+    - iteration: 60        # À partir de l'itération 30 (au lieu de 100)
       random_percentage: 0.50 # 50% aléatoire, 50% fixe
-    - iteration: 45        # À partir de l'itération 45 (au lieu de 150)
+    - iteration: 90        # À partir de l'itération 45 (au lieu de 150)
       random_percentage: 0.75 # 75% aléatoire, 25% fixe
-    - iteration: 60        # À partir de l'itération 60 (au lieu de 200)
+    - iteration: 100        # À partir de l'itération 60 (au lieu de 200)
       random_percentage: 1.0  # 100% aléatoire = comme avant
   
   # Curriculum basé sur le nombre de steps max par épisode
@@ -95,9 +95,9 @@ curriculum:
   obstacle_type_schedule:
     - iteration: 0         # Itérations 0-9
       obstacle_type: "holes"  # Seulement des trous (plus facile - apprendre à éviter de tomber)
-    - iteration: 20        # Itérations 10-19
+    - iteration: 30        # Itérations 10-19
       obstacle_type: "bumps"  # Seulement des bumps (intermédiaire - apprendre à naviguer)
-    - iteration: 40        # Itérations 20+
+    - iteration: 60        # Itérations 20+
       obstacle_type: "both"   # Trous ET bumps (difficile - combinaison des deux)
 
 # Paramètres physiques du robot (lus automatiquement depuis le XML)

@@ -465,8 +465,26 @@ def update_curriculum(envs, debug_env, iteration, num_iterations, config=None):
                 env_wrapper.set_max_steps(current_steps)
     
     # Update curriculum parameters for environments that support it
-    if hasattr(envs, 'envs'):
-        for env_wrapper in envs.envs:
+    if hasattr(envs, 'call'):
+        # Pour AsyncVectorEnv, utiliser la méthode call pour envoyer des commandes aux processus
+        try:
+            envs.call('update_curriculum_params', 
+                     random_percentage=random_percentage,
+                     obstacle_type=obstacle_type,
+                     max_steps=current_steps)
+        except Exception as e:
+            # Fallback to old method
+            if hasattr(envs, 'envs'):
+                for i, env_wrapper in enumerate(envs.envs):
+                    env = env_wrapper.env if hasattr(env_wrapper, 'env') else env_wrapper
+                    if hasattr(env, 'update_curriculum_params'):
+                        env.update_curriculum_params(
+                            random_percentage=random_percentage,
+                            obstacle_type=obstacle_type,
+                            max_steps=current_steps
+                        )
+    elif hasattr(envs, 'envs'):
+        for i, env_wrapper in enumerate(envs.envs):
             env = env_wrapper.env if hasattr(env_wrapper, 'env') else env_wrapper
             if hasattr(env, 'update_curriculum_params'):
                 env.update_curriculum_params(
@@ -798,6 +816,9 @@ def train(config_path="config.yaml", **kwargs):
     next_obs = torch.tensor(next_obs, dtype=torch.float32, device=device)
     next_done = torch.zeros(num_envs, device=device)
     
+    # Métriques par batch (configurable) - Charger existantes si disponibles
+    batch_metrics, last_batch_episode = load_existing_metrics("models/training_metrics.csv")
+    
     # Stats
     episode_returns = []
     episode_distances = []
@@ -807,9 +828,6 @@ def train(config_path="config.yaml", **kwargs):
     best_distance = 0.0
     successes = 0
     total_episodes = last_batch_episode  # FIXED: Continue from last saved episode instead of 0
-    
-    # Métriques par batch (configurable) - Charger existantes si disponibles
-    batch_metrics, last_batch_episode = load_existing_metrics("models/training_metrics.csv")
     
     # Compteur raisons de terminaison
     termination_reasons = {
