@@ -4,6 +4,7 @@ Entraînement PPO OPTIMISÉ pour robot dans corridor.
 - Gros batches pour GPU
 - Logging efficace
 - Configuration via fichier JSON
+# test
 """
 import os
 import time
@@ -58,14 +59,24 @@ def load_existing_metrics(metrics_file="models/training_metrics.csv"):
         with open(metrics_file, 'r', newline='') as f:
             reader = csv.DictReader(f)
             for row in reader:
-                # Convertir les valeurs en types appropriés
+                # Convertir les valeurs en types appropriés avec validation
+                try:
+                    mean_distance = float(row['mean_distance'])
+                    # Valider que la distance n'est pas NaN
+                    if mean_distance != mean_distance or mean_distance is None:  # mean_distance != mean_distance détecte NaN
+                        print(f"WARNING: Invalid mean_distance {row['mean_distance']} in CSV, using 0.0")
+                        mean_distance = 0.0
+                except (ValueError, TypeError):
+                    print(f"WARNING: Could not parse mean_distance {row['mean_distance']} in CSV, using 0.0")
+                    mean_distance = 0.0
+                
                 metrics = {
                     'batch_num': int(row['batch_num']),
                     'episode_end': int(row['episode_end']),
                     'episodes_range': row['episodes_range'],
                     'global_step': int(row['global_step']),
                     'mean_return': float(row['mean_return']),
-                    'mean_distance': float(row['mean_distance']),
+                    'mean_distance': mean_distance,
                     'mean_survival': float(row['mean_survival']),
                     'success_rate': float(row['success_rate'])
                 }
@@ -88,14 +99,163 @@ def save_metrics_to_csv(batch_metrics, metrics_file="models/training_metrics.csv
     if not batch_metrics:
         return
     
+    # NOUVEAU: Éliminer les doublons basés sur batch_num avant sauvegarde
+    seen_batch_nums = set()
+    unique_metrics = []
+    duplicates_found = 0
+    
+    for metrics in batch_metrics:
+        batch_num = metrics['batch_num']
+        if batch_num not in seen_batch_nums:
+            seen_batch_nums.add(batch_num)
+            unique_metrics.append(metrics)
+        else:
+            duplicates_found += 1
+    
+    if duplicates_found > 0:
+        print(f"WARNING: Removed {duplicates_found} duplicate batches before saving CSV")
+    
+    # Trier par batch_num pour assurer l'ordre
+    unique_metrics.sort(key=lambda x: x['batch_num'])
+    
     with open(metrics_file, 'w', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=['batch_num', 'episode_end', 'episodes_range', 
                                                'global_step', 'mean_return', 'mean_distance', 
                                                'mean_survival', 'success_rate'])
         writer.writeheader()
         
-        for metrics in batch_metrics:
+        for metrics in unique_metrics:
             writer.writerow(metrics)
+
+
+def save_temp_batch_to_csv(batch_metric, temp_metrics_file="models/temp_training_metrics.csv"):
+    """Sauvegarde un nouveau batch dans le CSV temporaire."""
+    import csv
+    import os
+    
+    if not batch_metric:
+        return
+    
+    # Si le fichier temp n'existe pas, créer avec header
+    file_exists = os.path.exists(temp_metrics_file)
+    
+    with open(temp_metrics_file, 'a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=['batch_num', 'episode_end', 'episodes_range', 
+                                               'global_step', 'mean_return', 'mean_distance', 
+                                               'mean_survival', 'success_rate'])
+        if not file_exists:
+            writer.writeheader()
+        
+        writer.writerow(batch_metric)
+
+
+def load_temp_metrics(temp_metrics_file="models/temp_training_metrics.csv"):
+    """Charge les métriques temporaires depuis le CSV temp."""
+    import csv
+    import os
+    
+    if not os.path.exists(temp_metrics_file):
+        return []
+    
+    try:
+        temp_metrics = []
+        with open(temp_metrics_file, 'r', newline='') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                # Convertir les valeurs en types appropriés avec validation
+                try:
+                    mean_distance = float(row['mean_distance'])
+                    # Valider que la distance n'est pas NaN
+                    if mean_distance != mean_distance or mean_distance is None:  # mean_distance != mean_distance détecte NaN
+                        print(f"WARNING: Invalid mean_distance {row['mean_distance']} in temp CSV, using 0.0")
+                        mean_distance = 0.0
+                except (ValueError, TypeError):
+                    print(f"WARNING: Could not parse mean_distance {row['mean_distance']} in temp CSV, using 0.0")
+                    mean_distance = 0.0
+                
+                try:
+                    mean_return = float(row['mean_return'])
+                    # Valider que le return n'est pas NaN
+                    if mean_return != mean_return or mean_return is None:  # mean_return != mean_return détecte NaN
+                        print(f"WARNING: Invalid mean_return {row['mean_return']} in temp CSV, using 0.0")
+                        mean_return = 0.0
+                except (ValueError, TypeError):
+                    print(f"WARNING: Could not parse mean_return {row['mean_return']} in temp CSV, using 0.0")
+                    mean_return = 0.0
+                
+                try:
+                    mean_survival = float(row['mean_survival'])
+                    # Valider que la survival n'est pas NaN
+                    if mean_survival != mean_survival or mean_survival is None:  # mean_survival != mean_survival détecte NaN
+                        print(f"WARNING: Invalid mean_survival {row['mean_survival']} in temp CSV, using 0.0")
+                        mean_survival = 0.0
+                except (ValueError, TypeError):
+                    print(f"WARNING: Could not parse mean_survival {row['mean_survival']} in temp CSV, using 0.0")
+                    mean_survival = 0.0
+                
+                metrics = {
+                    'batch_num': int(row['batch_num']),
+                    'episode_end': int(row['episode_end']),
+                    'episodes_range': row['episodes_range'],
+                    'global_step': int(row['global_step']),
+                    'mean_return': mean_return,
+                    'mean_distance': mean_distance,
+                    'mean_survival': mean_survival,
+                    'success_rate': float(row['success_rate'])
+                }
+                temp_metrics.append(metrics)
+        
+        return temp_metrics
+        
+    except Exception as e:
+        print(f"WARNING: Failed to load temp metrics: {e}")
+        return []
+
+
+def merge_and_sync_metrics(batch_metrics, temp_metrics_file="models/temp_training_metrics.csv", main_metrics_file="models/training_metrics.csv"):
+    """Fusionne les métriques temp avec les principales et reset le temp."""
+    import os
+    
+    # Charger les métriques temp
+    temp_metrics = load_temp_metrics(temp_metrics_file)
+    
+    if temp_metrics:
+        # NOUVEAU: Éviter les doublons en vérifiant les batch_num existants
+        existing_batch_nums = set(batch['batch_num'] for batch in batch_metrics)
+        
+        # Ajouter seulement les métriques temp qui ne sont pas déjà présentes
+        new_temp_metrics = []
+        for temp_metric in temp_metrics:
+            if temp_metric['batch_num'] not in existing_batch_nums:
+                new_temp_metrics.append(temp_metric)
+            else:
+                print(f"WARNING: Skipping duplicate batch {temp_metric['batch_num']} from temp CSV")
+        
+        if new_temp_metrics:
+            # Ajouter les nouvelles métriques temp aux principales
+            batch_metrics.extend(new_temp_metrics)
+            print(f"SYNC: Merged {len(new_temp_metrics)} new temp batches into main metrics")
+        else:
+            print(f"SYNC: No new temp batches to merge (all were duplicates)")
+        
+        # Sauvegarder tout dans le CSV principal
+        save_metrics_to_csv(batch_metrics, main_metrics_file)
+        
+        # Supprimer le fichier temp
+        try:
+            os.remove(temp_metrics_file)
+            print(f"SYNC: Temp metrics file cleared")
+        except Exception as e:
+            print(f"WARNING: Could not remove temp file: {e}")
+    
+    return batch_metrics
+
+
+def get_combined_metrics(batch_metrics, temp_metrics_file="models/temp_training_metrics.csv"):
+    """Obtient les métriques combinées (principales + temp) pour le curriculum."""
+    temp_metrics = load_temp_metrics(temp_metrics_file)
+    combined_metrics = batch_metrics + temp_metrics
+    return combined_metrics
 
 
 def plot_training_progress(metrics_list, current_iteration):
@@ -306,8 +466,8 @@ class Agent(nn.Module):
         )
 
 
-def make_env(config=None, random_percentage=None, curriculum_max_steps=None, obstacle_type=None):
-    """Factory pour environnement avec curriculum de corridors aléatoires, max_steps et obstacle types."""
+def make_env(config=None, random_percentage=None, curriculum_max_steps=None, bump_ratio=None):
+    """Factory pour environnement avec curriculum de corridors aléatoires, max_steps et bump ratio."""
     def thunk():
         if config and 'environment' in config:
             env_config = config['environment']
@@ -322,140 +482,259 @@ def make_env(config=None, random_percentage=None, curriculum_max_steps=None, obs
         # Utiliser curriculum_max_steps si fourni, sinon base_max_steps
         max_steps = curriculum_max_steps if curriculum_max_steps is not None else base_max_steps
         
-        # Utiliser obstacle_type par défaut si pas fourni
-        env_obstacle_type = obstacle_type if obstacle_type is not None else "both"
+        # Utiliser bump_ratio par défaut si pas fourni
+        env_bump_ratio = bump_ratio if bump_ratio is not None else 0.0
         
-        # Curriculum: décider si cet environnement utilise un corridor aléatoire ou fixe
-        if use_random_base and random_percentage is not None:
-            # Utiliser le pourcentage du curriculum
-            use_random_this_env = np.random.random() < random_percentage
-        else:
-            # Utiliser la configuration de base
-            use_random_this_env = use_random_base
-        
-        # NOUVEAU: Si obstacle_type n'est pas "both", utiliser le générateur
-        # mais respecter le pourcentage de corridors aléatoires
-        if env_obstacle_type != "both":
-            # Forcer l'utilisation du générateur pour les types d'obstacles spécifiques
-            corridor_xml = None
-            # Passer le random_percentage pour que l'env relance le dé à chaque reset
-            env_random_percentage = random_percentage
-            use_fixed_seed = False  # Pas utilisé, la décision se fait dans l'env
-        else:
-            # Utiliser corridor_xml=None pour générer aléatoirement EN MÉMOIRE
-            corridor_xml = None if use_random_this_env else corridor_xml_file
-            env_random_percentage = None
-            use_fixed_seed = False  # Pas utilisé pour "both"
+        # Toujours utiliser le générateur maintenant
+        corridor_xml = None
+        env_random_percentage = random_percentage
+        use_fixed_seed = False
             
-        env = CorridorEnv(max_steps=max_steps, corridor_xml=corridor_xml, obstacle_type=env_obstacle_type, use_fixed_seed=use_fixed_seed, random_percentage=env_random_percentage)
+        env = CorridorEnv(max_steps=max_steps, corridor_xml=corridor_xml, obstacle_type="holes", use_fixed_seed=use_fixed_seed, random_percentage=env_random_percentage)
+        env.bump_ratio = env_bump_ratio  # Initialiser bump_ratio
         env = gym.wrappers.RecordEpisodeStatistics(env)
         env = gym.wrappers.ClipAction(env)
         return env
     return thunk
 
 
-def get_curriculum_random_percentage(config, iteration):
-    """Obtenir le pourcentage de corridors aléatoires selon le curriculum."""
+def get_curriculum_state(config, batch_metrics):
+    """Obtenir l'état actuel du curriculum basé sur la distance moyenne des 2 derniers batches."""
     if not config or 'curriculum' not in config:
-        return None
+        return None, None, None, 1
     
     curriculum_config = config['curriculum']
     if not curriculum_config.get('enabled', False):
-        return None
+        return None, None, None, 1
     
-    schedule = curriculum_config.get('random_corridor_schedule', [])
+    # Calculer la distance moyenne des 2 derniers batches
+    if len(batch_metrics) < 2:
+        avg_distance = 0.0
+    else:
+        recent_distances = [batch['mean_distance'] for batch in batch_metrics[-2:]]
+        
+        # Filtrer les valeurs NaN ou invalides
+        valid_distances = [d for d in recent_distances if d == d and d is not None and d >= -10]  # d == d détecte NaN
+        if len(valid_distances) == 0:
+            avg_distance = 0.0
+            print(f"WARNING: All recent distances are invalid, using 0.0m for curriculum")
+        else:
+            avg_distance = sum(valid_distances) / len(valid_distances)
+            
+        # Debug seulement si problème
+        if avg_distance == 0.0 and len(batch_metrics) >= 2:
+            print(f"DEBUG: avg_distance=0! recent_distances={recent_distances}, valid_distances={valid_distances}")
+            print(f"DEBUG: Last 2 batches: batch_nums=[{batch_metrics[-2]['batch_num']}, {batch_metrics[-1]['batch_num']}]")
+    
+    # Déterminer la phase actuelle et la distance locale
+    phase_distance_history = getattr(get_curriculum_state, 'phase_distance_history', [])
+    current_phase = len(phase_distance_history) + 1
+    if current_phase > 3:
+        current_phase = 3
+    
+    # Obtenir le seuil de distance pour passer à la phase suivante depuis le config
+    bump_ratio_schedule = curriculum_config.get('bump_ratio_schedule', [])
+    phase_threshold = 100  # Valeur par défaut
+    for phase_config in bump_ratio_schedule:
+        if phase_config['phase'] == current_phase:
+            phase_threshold = phase_config.get('distance_threshold', 100)
+            break
+    
+    # Calculer la distance "locale" pour la phase actuelle
+    if current_phase == 1:
+        # Phase 1: utiliser la distance globale
+        local_distance = avg_distance
+    else:
+        # Phase 2 ou 3: calculer la distance depuis le début de la phase
+        if len(phase_distance_history) >= current_phase - 1:
+            # Distance depuis la transition vers cette phase
+            phase_start_distance = phase_distance_history[current_phase - 2] if current_phase > 1 else 0
+            local_distance = max(0, avg_distance - phase_start_distance)
+        else:
+            local_distance = avg_distance
+    
+    # Vérifier si on doit passer à la phase suivante
+    phase_changed = False
+    if current_phase < 3 and phase_threshold is not None and local_distance >= phase_threshold:
+        # Vérifier si on n'a pas déjà fait la transition pour cette phase
+        if not hasattr(get_curriculum_state, 'phase_transition_done'):
+            get_curriculum_state.phase_transition_done = set()
+        
+        # Calculer la nouvelle phase
+        new_phase = len(phase_distance_history) + 2  # +2 car on va ajouter à l'historique
+        if new_phase > 3:
+            new_phase = 3
+        
+        # Vérifier si cette transition n'a pas déjà été faite
+        if new_phase not in get_curriculum_state.phase_transition_done:
+            # Transition vers la phase suivante
+            phase_distance_history.append(avg_distance)
+            current_phase = len(phase_distance_history) + 1
+            if current_phase > 3:
+                current_phase = 3
+            local_distance = 0.0  # Reset de la distance locale pour la nouvelle phase
+            phase_changed = True
+            get_curriculum_state.phase_transition_done.add(current_phase)  # Marquer cette phase comme traitée
+            print(f"CURRICULUM: Phase transition! Moving to phase {current_phase} (local_distance: {local_distance:.1f}m ≥ {phase_threshold}m)")
+    
+    # Sauvegarder l'historique et tracker la distance max
+    get_curriculum_state.phase_distance_history = phase_distance_history
+    
+    # NOUVEAU: Tracker la distance maximale globale atteinte (irréversible)
+    if not hasattr(get_curriculum_state, 'max_distance_achieved'):
+        get_curriculum_state.max_distance_achieved = 0.0
+    
+    # Mettre à jour la distance max si on progresse
+    if avg_distance > get_curriculum_state.max_distance_achieved:
+        get_curriculum_state.max_distance_achieved = avg_distance
+        print(f"CURRICULUM: New max distance achieved: {avg_distance:.1f}m")
+    
+    max_distance_achieved = get_curriculum_state.max_distance_achieved
+    
+    # Obtenir le ratio de bumps pour la phase actuelle
+    current_bump_ratio = 0.0  # Défaut
+    for phase_config in bump_ratio_schedule:
+        if phase_config['phase'] == current_phase:
+            current_bump_ratio = phase_config['bump_ratio']
+            break
+    
+    # Pour chaque phase, calculer la distance "locale" (reset à 0 à chaque phase)
+    # Obtenir les paramètres basés sur la distance locale (reset à chaque phase)
+    random_percentage = get_curriculum_value_by_distance(
+        curriculum_config.get('random_corridor_schedule', []), 
+        local_distance, 
+        'random_percentage', 
+        0.2,
+        None  # Pas de palier irréversible, on reset à chaque phase
+    )
+    
+    max_steps = get_curriculum_value_by_distance(
+        curriculum_config.get('max_steps_schedule', []), 
+        local_distance, 
+        'max_steps', 
+        3000,
+        None  # Pas de palier irréversible, on reset à chaque phase
+    )
+    
+    return random_percentage, current_bump_ratio, max_steps, current_phase, local_distance, phase_changed
+
+
+def get_curriculum_value_by_distance(schedule, distance, value_key, default_value, current_max_achieved=None):
+    """Obtenir une valeur du curriculum basée sur la distance avec paliers irréversibles."""
     if not schedule:
-        return None
+        return default_value
     
-    # Trouver le bon pourcentage selon l'itération actuelle
-    current_percentage = 0.0
+    # Trouver le palier le plus élevé atteint
+    max_achieved_value = default_value
+    if current_max_achieved is not None:
+        for stage in schedule:
+            if current_max_achieved >= stage['distance']:
+                max_achieved_value = stage[value_key]
+    
+    # Trouver le palier actuel basé sur la distance
+    current_value = default_value
     for stage in schedule:
-        if iteration >= stage['iteration']:
-            current_percentage = stage['random_percentage']
+        if distance >= stage['distance']:
+            current_value = stage[value_key]
         else:
             break
     
-    return current_percentage
-
-
-def get_curriculum_obstacle_type(config, iteration):
-    """Obtenir le type d'obstacles selon le curriculum."""
-    if not config or 'curriculum' not in config:
-        return None
-    
-    curriculum_config = config['curriculum']
-    if not curriculum_config.get('enabled', False):
-        return None
-    
-    schedule = curriculum_config.get('obstacle_type_schedule', [])
-    if not schedule:
-        return None
-    
-    # Trouver le bon type d'obstacles selon l'itération actuelle
-    current_obstacle_type = "both"  # Valeur par défaut
-    for stage in schedule:
-        if iteration >= stage['iteration']:
-            current_obstacle_type = stage['obstacle_type']
+    # Retourner le maximum entre le palier actuel et le palier max déjà atteint (pas de régression)
+    if current_max_achieved is not None:
+        # Pour les valeurs qui augmentent (random_percentage, max_steps)
+        if value_key in ['random_percentage', 'max_steps']:
+            return max(current_value, max_achieved_value)
         else:
-            break
-    
-    return current_obstacle_type
+            return current_value
+    else:
+        return current_value
 
 
-def get_curriculum_max_steps(config, iteration):
-    """Obtenir le nombre de steps max selon le curriculum."""
-    if not config or 'curriculum' not in config:
+def get_curriculum_random_percentage(config, iteration, batch_metrics=None):
+    """Obtenir le pourcentage de corridors aléatoires selon le curriculum (compatibilité)."""
+    if batch_metrics is None:
         return None
-    
-    curriculum_config = config['curriculum']
-    if not curriculum_config.get('enabled', False):
-        return None
-    
-    schedule = curriculum_config.get('max_steps_schedule', [])
-    if not schedule:
-        return None
-    
-    # Trouver le bon nombre de steps selon l'itération actuelle
-    current_max_steps = 4000  # Valeur par défaut
-    for stage in schedule:
-        if iteration >= stage['iteration']:
-            current_max_steps = stage['max_steps']
-        else:
-            break
-    
-    return current_max_steps
+    random_percentage, _, _, _, _, _ = get_curriculum_state(config, batch_metrics)
+    return random_percentage
 
 
-def update_curriculum(envs, debug_env, iteration, num_iterations, config=None):
-    """Curriculum learning avec pourcentage de corridors aléatoires, steps max et types d'obstacles."""
+def get_curriculum_bump_ratio(config, iteration, batch_metrics=None):
+    """Obtenir le ratio de bumps selon le curriculum."""
+    if batch_metrics is None:
+        return None
+    _, bump_ratio, _, _, _, _ = get_curriculum_state(config, batch_metrics)
+    return bump_ratio
+
+
+def get_curriculum_max_steps(config, iteration, batch_metrics=None):
+    """Obtenir le nombre de steps max selon le curriculum (compatibilité)."""
+    if batch_metrics is None:
+        return None
+    _, _, max_steps, _, _, _ = get_curriculum_state(config, batch_metrics)
+    return max_steps
+
+
+def update_curriculum(envs, debug_env, iteration, num_iterations, config=None, batch_metrics=None):
+    """Curriculum learning basé sur la distance moyenne des 2 derniers batches."""
     
-    # Curriculum de corridors aléatoires
-    random_percentage = get_curriculum_random_percentage(config, iteration)
+    # Vérifier si les batch_metrics ont changé depuis la dernière fois
+    current_batch_count = len(batch_metrics) if batch_metrics else 0
+    last_batch_count = getattr(update_curriculum, 'last_batch_count', -1)
     
-    # Curriculum de steps max
-    current_steps = get_curriculum_max_steps(config, iteration)
+    # Ne mettre à jour le curriculum que si de nouveaux batches sont disponibles
+    if current_batch_count <= last_batch_count:
+        # Pas de nouveaux batches, utiliser les dernières valeurs calculées
+        cached_values = getattr(update_curriculum, 'cached_curriculum_values', (None, None, None, None, None, False))
+        random_percentage, bump_ratio, current_steps, current_phase, local_distance, phase_changed = cached_values
+        
+        # Valeurs par défaut si pas de cache
+        if current_steps is None:
+            if config and 'environment' in config:
+                current_steps = config['environment'].get('max_steps', 4000)
+            else:
+                current_steps = 4000
+        
+        # Pas d'affichage si pas de changement
+        return current_steps, random_percentage, bump_ratio, phase_changed
+    
+    # Nouveaux batches disponibles, recalculer le curriculum
+    if iteration % 5 == 0:  # Afficher seulement toutes les 5 itérations pour réduire le spam
+        print(f"CURRICULUM: New batch detected ({current_batch_count} vs {last_batch_count}), updating curriculum...")
+    update_curriculum.last_batch_count = current_batch_count
+    
+    # Obtenir l'état du curriculum basé sur la distance
+    random_percentage, bump_ratio, current_steps, current_phase, local_distance, phase_changed = get_curriculum_state(config, batch_metrics or [])
+    
+    # Sauvegarder les valeurs calculées
+    update_curriculum.cached_curriculum_values = (random_percentage, bump_ratio, current_steps, current_phase, local_distance, phase_changed)
+    
+    # Valeurs par défaut si pas de curriculum
     if current_steps is None:
-        # Si pas de curriculum, utiliser la valeur de base du config
         if config and 'environment' in config:
             current_steps = config['environment'].get('max_steps', 4000)
         else:
             current_steps = 4000
     
-    # Curriculum de types d'obstacles
-    obstacle_type = get_curriculum_obstacle_type(config, iteration)
+    # Calculer la distance moyenne pour l'affichage
+    avg_distance = 0.0
+    if batch_metrics and len(batch_metrics) >= 2:
+        recent_distances = [batch['mean_distance'] for batch in batch_metrics[-2:]]
+        # Filtrer les valeurs NaN ou invalides
+        valid_distances = [d for d in recent_distances if d == d and d is not None and d >= -10]  # d == d détecte non-NaN
+        if len(valid_distances) > 0:
+            avg_distance = sum(valid_distances) / len(valid_distances)
     
-    if random_percentage is not None or current_steps != 4000 or obstacle_type is not None:
-        # Afficher le curriculum actuel
-        curriculum_info = f"CURRICULUM (iteration {iteration}):"
-        if random_percentage is not None:
-            curriculum_info += f" Random corridors: {random_percentage*100:.0f}%"
-        curriculum_info += f" Max steps: {current_steps}"
-        if obstacle_type is not None:
-            obstacle_desc = {"holes": "trous seulement", "bumps": "bumps seulement", "both": "trous et bumps"}
-            curriculum_info += f" Obstacles: {obstacle_desc.get(obstacle_type, obstacle_type)}"
-        print(curriculum_info)
+    if random_percentage is not None or current_steps != 4000 or bump_ratio is not None:
+        # Afficher le curriculum actuel seulement si c'est un nouveau batch ou toutes les 10 itérations
+        if current_batch_count > last_batch_count or iteration % 10 == 0:
+            curriculum_info = f"CURRICULUM (Phase {current_phase}, local_dist: {local_distance:.1f}m, global_dist: {avg_distance:.1f}m):"
+            if random_percentage is not None:
+                curriculum_info += f" Random corridors: {random_percentage*100:.0f}%"
+            curriculum_info += f" Max steps: {current_steps}"
+            if bump_ratio is not None:
+                curriculum_info += f" Obstacles: holes + {int(bump_ratio*100)}% bumps"
+            print(curriculum_info)
     
-    # CRITICAL FIX: Actually update environment parameters
     # Update max_steps for all environments
     if hasattr(envs, 'envs'):
         for env_wrapper in envs.envs:
@@ -470,7 +749,7 @@ def update_curriculum(envs, debug_env, iteration, num_iterations, config=None):
         try:
             envs.call('update_curriculum_params', 
                      random_percentage=random_percentage,
-                     obstacle_type=obstacle_type,
+                     bump_ratio=bump_ratio,
                      max_steps=current_steps)
         except Exception as e:
             # Fallback to old method
@@ -480,7 +759,7 @@ def update_curriculum(envs, debug_env, iteration, num_iterations, config=None):
                     if hasattr(env, 'update_curriculum_params'):
                         env.update_curriculum_params(
                             random_percentage=random_percentage,
-                            obstacle_type=obstacle_type,
+                            bump_ratio=bump_ratio,
                             max_steps=current_steps
                         )
     elif hasattr(envs, 'envs'):
@@ -489,7 +768,7 @@ def update_curriculum(envs, debug_env, iteration, num_iterations, config=None):
             if hasattr(env, 'update_curriculum_params'):
                 env.update_curriculum_params(
                     random_percentage=random_percentage,
-                    obstacle_type=obstacle_type,
+                    bump_ratio=bump_ratio,
                     max_steps=current_steps
                 )
     
@@ -499,22 +778,23 @@ def update_curriculum(envs, debug_env, iteration, num_iterations, config=None):
     if hasattr(debug_env, 'update_curriculum_params'):
         debug_env.update_curriculum_params(
             random_percentage=random_percentage,
-            obstacle_type=obstacle_type,
+            bump_ratio=bump_ratio,
             max_steps=current_steps
         )
     
-    return current_steps, random_percentage, obstacle_type
+    return current_steps, random_percentage, bump_ratio, phase_changed
 
 
-def debug_render_episode(agent, debug_env, device, max_steps=None, current_obstacle_type=None):
+def debug_render_episode(agent, debug_env, device, max_steps=None, current_bump_ratio=None):
     """Render un épisode de debug pour voir ce qui se passe."""
     print("\nDEBUG: Rendering episode visualization...")
     
-    # Si un type d'obstacles spécifique est fourni, créer un nouvel environnement temporaire
-    if current_obstacle_type and current_obstacle_type != "both":
-        print(f"DEBUG: Creating temporary environment with obstacle_type='{current_obstacle_type}'")
+    # Si un bump_ratio spécifique est fourni, créer un nouvel environnement temporaire
+    if current_bump_ratio is not None:
+        print(f"DEBUG: Creating temporary environment with bump_ratio={current_bump_ratio}")
         from corridor_env import CorridorEnv
-        temp_debug_env = CorridorEnv(max_steps=max_steps or 3000, corridor_xml=None, obstacle_type=current_obstacle_type, use_fixed_seed=True, random_percentage=None)
+        temp_debug_env = CorridorEnv(max_steps=max_steps or 3000, corridor_xml=None, obstacle_type="holes", use_fixed_seed=True, random_percentage=None)
+        temp_debug_env.bump_ratio = current_bump_ratio
         env_to_use = temp_debug_env
     else:
         env_to_use = debug_env
@@ -605,7 +885,7 @@ def debug_render_episode(agent, debug_env, device, max_steps=None, current_obsta
             corridor_type = info.get('corridor_type', 'unknown')
             is_random = info.get('is_random', False)
             random_str = "random" if is_random else "fixed"
-            print(f"Episode ended: {reason:<9} | Steps: {step:>3} | Distance: {final_x:>5.2f}m | Reward: {ep_return:>5.1f} | Corridor: {corridor_type}-{random_str}")
+            print(f"Episode ended: {reason:<9} | Steps: {step:>4} | Distance: {final_x:>5.2f}m | Reward: {ep_return:>5.1f} | Corridor: {corridor_type}-{random_str}")
             
             # Attendre un peu pour voir le résultat
             time.sleep(2.0)
@@ -714,21 +994,18 @@ def train(config_path="config.yaml", **kwargs):
     print(f"GAE Lambda: {gae_lambda}")
     print("=" * 70 + "\n")
     
-    # Curriculum initial (itération 0)
-    initial_random_percentage = get_curriculum_random_percentage(config, 0)
-    initial_max_steps = get_curriculum_max_steps(config, 0)
-    initial_obstacle_type = get_curriculum_obstacle_type(config, 0)
+    # Curriculum initial (distance 0)
+    initial_random_percentage, initial_bump_ratio, initial_max_steps, initial_phase, _, _ = get_curriculum_state(config, [])
     
     if initial_random_percentage is not None:
         print(f"CURRICULUM: Starting with {initial_random_percentage*100:.0f}% random corridors")
     if initial_max_steps is not None:
         print(f"CURRICULUM: Starting with {initial_max_steps} max steps per episode")
-    if initial_obstacle_type is not None:
-        obstacle_desc = {"holes": "trous seulement", "bumps": "bumps seulement", "both": "trous et bumps"}
-        print(f"CURRICULUM: Starting with {obstacle_desc.get(initial_obstacle_type, initial_obstacle_type)}")
+    if initial_bump_ratio is not None:
+        print(f"CURRICULUM: Starting with holes + {int(initial_bump_ratio*100)}% bumps")
     
     # Environnements parallèles avec curriculum complet
-    envs = gym.vector.AsyncVectorEnv([make_env(config, initial_random_percentage, initial_max_steps, initial_obstacle_type) for _ in range(num_envs)])
+    envs = gym.vector.AsyncVectorEnv([make_env(config, initial_random_percentage, initial_max_steps, initial_bump_ratio) for _ in range(num_envs)])
     
     # Environnement de debug pour visualisation
     if config and 'environment' in config:
@@ -747,17 +1024,12 @@ def train(config_path="config.yaml", **kwargs):
         debug_max_steps = initial_max_steps if initial_max_steps else 1000
         debug_corridor_xml = None  # Génération aléatoire
     
-    debug_obstacle_type = initial_obstacle_type if initial_obstacle_type else "both"
+    debug_bump_ratio = initial_bump_ratio if initial_bump_ratio is not None else 0.0
+    debug_corridor_xml = None  # Toujours utiliser le générateur
+    debug_use_fixed_seed = True  # Seed fixe pour debug
     
-    # NOUVEAU: Si obstacle_type n'est pas "both", forcer l'utilisation du générateur pour le debug aussi
-    if debug_obstacle_type != "both":
-        debug_corridor_xml = None  # Forcer l'utilisation du générateur
-        # Pour le debug, utiliser seed fixe pour la reproductibilité
-        debug_use_fixed_seed = True
-    else:
-        debug_use_fixed_seed = False
-    
-    debug_env = CorridorEnv(max_steps=debug_max_steps, corridor_xml=debug_corridor_xml, obstacle_type=debug_obstacle_type, use_fixed_seed=debug_use_fixed_seed, random_percentage=initial_random_percentage if debug_obstacle_type != "both" else None)
+    debug_env = CorridorEnv(max_steps=debug_max_steps, corridor_xml=debug_corridor_xml, obstacle_type="holes", use_fixed_seed=debug_use_fixed_seed, random_percentage=initial_random_percentage)
+    debug_env.bump_ratio = debug_bump_ratio
     
     obs_dim = envs.single_observation_space.shape[0]
     act_dim = envs.single_action_space.shape[0]
@@ -789,15 +1061,67 @@ def train(config_path="config.yaml", **kwargs):
         print(f"   Loading from {latest_step:,} steps...")
         
         try:
-            agent.load_state_dict(torch.load(model_path, map_location=device))
-            start_iteration = (latest_step // batch_size) + 1
-            print(f"   OK: Model loaded! Resuming at iteration {start_iteration}")
+            checkpoint = torch.load(model_path, map_location=device)
+            
+            # Nouveau format avec métadonnées
+            if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                agent.load_state_dict(checkpoint['model_state_dict'])
+                saved_iteration = checkpoint.get('iteration', (latest_step // batch_size) + 1)
+                saved_global_step = checkpoint.get('global_step', latest_step)
+                saved_total_episodes = checkpoint.get('total_episodes', 0)
+                
+                start_iteration = saved_iteration + 1  # Reprendre à l'itération suivante
+                print(f"   OK: Model loaded with metadata! Resuming at iteration {start_iteration}")
+                print(f"   SAVED: iteration={saved_iteration}, global_step={saved_global_step:,}, episodes={saved_total_episodes}")
+                
+                # NOUVEAU: Initialiser global_step avec la valeur sauvegardée
+                global_step = saved_global_step
+                
+                # Ajuster total_episodes si disponible
+                if saved_total_episodes > 0:
+                    total_episodes = saved_total_episodes
+                    
+            # Ancien format (juste state_dict)
+            else:
+                agent.load_state_dict(checkpoint)
+                start_iteration = (latest_step // batch_size) + 1
+                global_step = latest_step  # NOUVEAU: Initialiser global_step
+                print(f"   OK: Model loaded (legacy format)! Resuming at iteration {start_iteration}")
+                
             print(f"   STATS: Steps completed: {latest_step:,}")
             print(f"   TARGET: Steps remaining: {total_timesteps - latest_step:,}")
+            
+            # NOUVEAU: Nettoyer le CSV temp au redémarrage pour éviter les données obsolètes
+            temp_csv_path = "models/temp_training_metrics.csv"
+            if os.path.exists(temp_csv_path):
+                os.remove(temp_csv_path)
+                print(f"   CLEANUP: Removed obsolete temp CSV")
+            
+            # NOUVEAU: Nettoyer les anciens graphiques PNG d'itérations futures
+            import glob
+            png_files = glob.glob("models/training_progress_iter_*.png")
+            cleaned_count = 0
+            for png_file in png_files:
+                try:
+                    # Extraire le numéro d'itération du nom de fichier
+                    filename = os.path.basename(png_file)
+                    iter_num = int(filename.replace("training_progress_iter_", "").replace(".png", ""))
+                    
+                    # Supprimer si l'itération est >= à l'itération de reprise
+                    if iter_num >= start_iteration:
+                        os.remove(png_file)
+                        cleaned_count += 1
+                except (ValueError, OSError):
+                    continue
+            
+            if cleaned_count > 0:
+                print(f"   CLEANUP: Removed {cleaned_count} obsolete PNG files (iter >= {start_iteration})")
+                
         except Exception as e:
             print(f"   ERROR: Loading failed: {e}")
             print(f"   RESTART: Starting from scratch...")
             start_iteration = 1
+            global_step = 0  # NOUVEAU: Initialiser global_step à 0 si échec
     else:
         print("NEW: New model - Starting from scratch")
     
@@ -810,7 +1134,8 @@ def train(config_path="config.yaml", **kwargs):
     values = torch.zeros((num_steps, num_envs), device=device)
     
     # Init
-    global_step = 0
+    if 'global_step' not in locals():
+        global_step = 0  # Initialiser si pas déjà fait lors du chargement
     start_time = time.time()
     next_obs, _ = envs.reset(seed=seed)
     next_obs = torch.tensor(next_obs, dtype=torch.float32, device=device)
@@ -842,10 +1167,43 @@ def train(config_path="config.yaml", **kwargs):
     }
     
     os.makedirs("models", exist_ok=True)
+    
+    # Initialiser les variables du curriculum (seront mises à jour après chaque batch)
+    current_max_steps = config['environment'].get('max_steps', 4000) if config and 'environment' in config else 4000
+    random_percentage = None
+    bump_ratio = None
 
     for iteration in range(start_iteration, num_iterations + 1):
-        # === CURRICULUM: Ajuster max_steps, pourcentage de corridors aléatoires et types d'obstacles ===
-        current_max_steps, random_percentage, obstacle_type = update_curriculum(envs, debug_env, iteration, num_iterations, config)
+        # === UPDATE CURRICULUM (début d'itération) ===
+        # Vérifier si un nouveau batch a été complété et mettre à jour le curriculum
+        if batch_metrics:
+            # Lire le dernier batch complété
+            last_batch = batch_metrics[-1]
+            last_batch_distance = last_batch['mean_distance']
+            
+            print(f"\n{'='*70}")
+            print(f"CURRICULUM CHECK (Iteration {iteration})")
+            print(f"{'='*70}")
+            print(f"Last batch: #{last_batch['batch_num']} | Episodes {last_batch['episodes_range']} | Distance: {last_batch_distance:.1f}m")
+            
+            # Mettre à jour le curriculum basé sur le dernier batch
+            combined_metrics = get_combined_metrics(batch_metrics, "models/temp_training_metrics.csv")
+            current_max_steps, random_percentage, bump_ratio, phase_changed = update_curriculum(envs, debug_env, iteration, num_iterations, config, combined_metrics)
+            
+            # Render immédiatement si changement de phase
+            if phase_changed:
+                print(f"\n{'='*70}")
+                print("PHASE CHANGE DETECTED - Rendering episode with new obstacles")
+                print(f"{'='*70}\n")
+                debug_render_episode(agent, debug_env, device, current_max_steps, bump_ratio)
+                
+                # IMPORTANT: Reset phase_changed dans le cache pour éviter de re-render
+                if hasattr(update_curriculum, 'cached_curriculum_values'):
+                    cached = list(update_curriculum.cached_curriculum_values)
+                    cached[5] = False  # phase_changed = False
+                    update_curriculum.cached_curriculum_values = tuple(cached)
+            
+            print(f"{'='*70}\n")
         
         # === COLLECTE ROLLOUTS (parallèle sur num_envs) ===
         for step in range(num_steps):
@@ -877,7 +1235,13 @@ def train(config_path="config.yaml", **kwargs):
                         if isinstance(infos, list) and i < len(infos) and infos[i]:
                             info = infos[i]
                             reason = info.get('reason', 'truncated' if trunc[i] else 'unknown')
-                            dist = info.get('x', 0)
+                            raw_dist = info.get('x', 0)
+                            # Valider que la distance n'est pas NaN ou invalide
+                            if raw_dist != raw_dist or raw_dist is None or raw_dist < -10:  # raw_dist != raw_dist détecte NaN
+                                dist = 0.0
+                                print(f"  WARNING: Invalid distance {raw_dist} for env {i}, using 0.0")
+                            else:
+                                dist = float(raw_dist)
                             ret = info.get('episode', {}).get('r', reward[i] if i < len(reward) else 0)
                             steps = info.get('step', 0)
                             corridor_type = info.get('corridor_type', 'unknown')
@@ -897,7 +1261,13 @@ def train(config_path="config.yaml", **kwargs):
                             x_list = infos.get('x', [])
                             x_mask = infos.get('_x', [])
                             if i < len(x_list) and i < len(x_mask) and x_mask[i]:
-                                dist = float(x_list[i])
+                                raw_dist = x_list[i]
+                                # Valider que la distance n'est pas NaN ou invalide
+                                if raw_dist != raw_dist or raw_dist is None or raw_dist < -10:  # raw_dist != raw_dist détecte NaN
+                                    dist = 0.0
+                                    print(f"  WARNING: Invalid distance {raw_dist} for env {i}, using 0.0")
+                                else:
+                                    dist = float(raw_dist)
                             else:
                                 dist = 0.0
                             
@@ -972,7 +1342,7 @@ def train(config_path="config.yaml", **kwargs):
                     corridor_type = info.get('corridor_type', 'unknown')
                     is_random = info.get('is_random', False)
                     random_str = "random" if is_random else "fixed"
-                    print(f"Episode {total_episodes:>3}: {reason:<9} | Steps: {steps:>3} | Distance: {dist:>5.2f}m | Reward: {ret:>5.1f} | Corridor: {corridor_type}-{random_str}")
+                    print(f"Episode {total_episodes:>3}: {reason:<9} | Steps: {steps:>4} | Distance: {dist:>5.2f}m | Reward: {ret:>5.1f} | Corridor: {corridor_type}-{random_str}")
                     
                     if ret > best_return:
                         best_return = ret
@@ -1063,41 +1433,90 @@ def train(config_path="config.yaml", **kwargs):
                 batch_start = last_batch_episode
                 batch_end = last_batch_episode + batch_size_metrics
                 
-                # Calculer moyennes pour ce batch de 100 épisodes
-                batch_returns = episode_returns[batch_start:batch_end]
-                batch_distances = episode_distances[batch_start:batch_end]
-                batch_steps_list = episode_steps[batch_start:batch_end]
-                batch_reasons = episode_reasons[batch_start:batch_end]
+                # CORRECTION: Ajuster les indices pour les listes en mémoire
+                # Les listes episode_returns, episode_distances, etc. commencent à 0
+                # mais batch_start/batch_end sont des numéros d'épisodes absolus
+                memory_start = len(episode_returns) - (total_episodes - batch_start)
+                memory_end = len(episode_returns) - (total_episodes - batch_end)
+                
+                # Sécurité : s'assurer que les indices sont valides
+                memory_start = max(0, memory_start)
+                memory_end = min(len(episode_returns), memory_end)
+                
+                if memory_end <= memory_start:
+                    print(f"  ERROR: Invalid memory indices {memory_start}-{memory_end} for batch {len(batch_metrics) + 1}")
+                    break
+                
+                # Calculer moyennes pour ce batch de 20 épisodes
+                batch_returns = episode_returns[memory_start:memory_end]
+                batch_distances = episode_distances[memory_start:memory_end]
+                batch_steps_list = episode_steps[memory_start:memory_end]
+                batch_reasons = episode_reasons[memory_start:memory_end]
+                
+                # Valider les distances avant calcul de la moyenne
+                valid_distances = [d for d in batch_distances if d == d and d is not None and d >= -10]  # d == d détecte non-NaN
+                if len(valid_distances) == 0:
+                    mean_distance = 0.0
+                    print(f"  WARNING: No valid distances in batch {len(batch_metrics) + 1}, using 0.0")
+                else:
+                    mean_distance = np.mean(valid_distances)
+                    if len(valid_distances) < len(batch_distances):
+                        invalid_count = len(batch_distances) - len(valid_distances)
+                        print(f"  WARNING: {invalid_count} invalid distances filtered out in batch {len(batch_metrics) + 1}")
+                
+                # Valider les returns avant calcul de la moyenne
+                valid_returns = [r for r in batch_returns if r == r and r is not None]  # r == r détecte non-NaN
+                if len(valid_returns) == 0:
+                    mean_return = 0.0
+                    print(f"  WARNING: No valid returns in batch {len(batch_metrics) + 1}, using 0.0")
+                else:
+                    mean_return = np.mean(valid_returns)
+                    if len(valid_returns) < len(batch_returns):
+                        invalid_count = len(batch_returns) - len(valid_returns)
+                        print(f"  WARNING: {invalid_count} invalid returns filtered out in batch {len(batch_metrics) + 1}")
+                
+                # Valider les steps avant calcul de la moyenne
+                valid_steps = [s for s in batch_steps_list if s == s and s is not None and s >= 0]  # s == s détecte non-NaN
+                if len(valid_steps) == 0:
+                    mean_survival = 0.0
+                    print(f"  WARNING: No valid steps in batch {len(batch_metrics) + 1}, using 0.0")
+                else:
+                    mean_survival = np.mean(valid_steps)
+                    if len(valid_steps) < len(batch_steps_list):
+                        invalid_count = len(batch_steps_list) - len(valid_steps)
+                        print(f"  WARNING: {invalid_count} invalid steps filtered out in batch {len(batch_metrics) + 1}")
                 
                 # Compter succès dans ce batch basé sur les RAISONS, pas les distances
                 batch_successes = sum(1 for reason in batch_reasons if reason == 'success')
                 
-                batch_metrics.append({
+                # Créer le nouveau batch metric
+                new_batch_metric = {
                     'batch_num': len(batch_metrics) + 1,
                     'episode_end': batch_end,  # Numéro du dernier épisode de ce batch
                     'episodes_range': f"{batch_start+1}-{batch_end}",
                     'global_step': global_step,
-                    'mean_return': np.mean(batch_returns),
-                    'mean_distance': np.mean(batch_distances),
-                    'mean_survival': np.mean(batch_steps_list),
+                    'mean_return': mean_return,
+                    'mean_distance': mean_distance,
+                    'mean_survival': mean_survival,
                     'success_rate': 100 * batch_successes / batch_size_metrics,
-                })
+                }
+                
+                # Ajouter aux métriques en mémoire
+                batch_metrics.append(new_batch_metric)
+                
+                # NOUVEAU: Sauvegarder immédiatement dans le CSV temporaire
+                save_temp_batch_to_csv(new_batch_metric, "models/temp_training_metrics.csv")
                 
                 last_batch_episode = batch_end
-                print(f"BATCH: Batch {len(batch_metrics)} completed (episodes {batch_start+1}-{batch_end})")
+                print(f"BATCH: Batch {len(batch_metrics)} completed (episodes {batch_start+1}-{batch_end}) - saved to temp CSV")
             
             print(f"\n{'='*70}")
             print(f"ITERATION {iteration}/{num_iterations} | Steps: {global_step:,} | SPS: {sps:,} | Time: {elapsed:.0f}s")
             print(f"Max Steps Curriculum: {current_max_steps}")
             if random_percentage is not None:
                 print(f"Random Corridors: {random_percentage*100:.0f}%")
-            if obstacle_type is not None:
-                obstacle_names = {
-                    "holes": "Trous seulement",
-                    "bumps": "Bumps seulement", 
-                    "both": "Trous et bumps"
-                }
-                print(f"Obstacles: {obstacle_names.get(obstacle_type, obstacle_type)}")
+            if bump_ratio is not None:
+                print(f"Obstacles: holes + {int(bump_ratio*100)}% bumps")
             print(f"{'='*70}")
             
             if episode_returns:
@@ -1107,7 +1526,11 @@ def train(config_path="config.yaml", **kwargs):
                 
                 success_rate = 100 * successes / max(1, total_episodes)
                 print(f"EPISODES: {total_episodes} total | Success: {successes} ({success_rate:.1f}%)")
-                print(f"BATCHES: {len(batch_metrics)} batches of {batch_size_metrics} episodes completed")
+                
+                # NOUVEAU: Utiliser les métriques combinées pour l'affichage
+                combined_metrics = get_combined_metrics(batch_metrics, "models/temp_training_metrics.csv")
+                print(f"BATCHES: {len(combined_metrics)} batches of {batch_size_metrics} episodes completed (including temp)")
+                
                 print(f"REWARD  : Recent {np.mean(recent_ret):>7.1f} +/- {np.std(recent_ret):>5.1f} | Best {best_return:>7.1f}")
                 print(f"DISTANCE: Recent {np.mean(recent_dist):>7.1f}m +/- {np.std(recent_dist):>5.1f}m | Best {best_distance:>7.1f}m")
                 print(f"SURVIVAL: Recent {np.mean(recent_steps):>7.0f} steps +/- {np.std(recent_steps):>5.0f}")
@@ -1125,21 +1548,31 @@ def train(config_path="config.yaml", **kwargs):
         # Sauvegarde périodique
         if iteration % save_interval == 0:
             model_path = f"models/ppo_corridor_{global_step}.pth"
-            torch.save(agent.state_dict(), model_path)
-            print(f"SAVE: Model saved to {model_path}")
             
-            # Sauvegarder métriques des batches en CSV
-            if batch_metrics:
-                save_metrics_to_csv(batch_metrics, "models/training_metrics.csv")
-                print(f"METRICS: Batch metrics saved to models/training_metrics.csv")
+            # NOUVEAU: Sauvegarder avec métadonnées (itération, global_step, etc.)
+            save_data = {
+                'model_state_dict': agent.state_dict(),
+                'iteration': iteration,
+                'global_step': global_step,
+                'total_episodes': total_episodes,
+                'batch_size': batch_size,
+                'config_path': config_path if 'config_path' in locals() else 'config.yaml'
+            }
+            torch.save(save_data, model_path)
+            print(f"SAVE: Model saved to {model_path} (iteration {iteration})")
+            
+            # NOUVEAU: Fusionner les métriques temp avec les principales et sauvegarder
+            batch_metrics = merge_and_sync_metrics(batch_metrics, "models/temp_training_metrics.csv", "models/training_metrics.csv")
+            print(f"METRICS: All metrics synchronized to models/training_metrics.csv")
         
-        # Afficher graphiques
+        # Afficher graphiques avec toutes les métriques (principales + temp)
         if iteration % plot_interval == 0 and iteration > 0 and batch_metrics:
-            plot_training_progress(batch_metrics, iteration)
+            combined_metrics = get_combined_metrics(batch_metrics, "models/temp_training_metrics.csv")
+            plot_training_progress(combined_metrics, iteration)
         
         # Debug render
         if iteration % render_interval == 0 or iteration == 1:
-            debug_render_episode(agent, debug_env, device, current_max_steps, obstacle_type)
+            debug_render_episode(agent, debug_env, device, current_max_steps, bump_ratio)
     
     # === FIN ===
     elapsed = time.time() - start_time
@@ -1163,18 +1596,27 @@ def train(config_path="config.yaml", **kwargs):
         print(f"  Survie moyenne: {last_batch['mean_survival']:.0f} steps")
         print(f"  Taux de succès: {last_batch['success_rate']:.1f}%")
     
-    # Sauvegarder métriques finales
+    # Sauvegarder métriques finales (fusionner temp avec principales)
+    batch_metrics = merge_and_sync_metrics(batch_metrics, "models/temp_training_metrics.csv", "models/training_metrics.csv")
+    print(f"\nMETRICS: All metrics synchronized to models/training_metrics.csv")
+    
+    # Générer graphique final avec toutes les métriques
     if batch_metrics:
-        save_metrics_to_csv(batch_metrics, "models/training_metrics.csv")
-        print(f"\nMETRICS: All metrics saved to models/training_metrics.csv")
-        
-        # Générer graphique final
         plot_training_progress(batch_metrics, num_iterations)
     
     # Sauvegarde finale
     final_path = "models/ppo_corridor_final.pth"
-    torch.save(agent.state_dict(), final_path)
-    print(f"\nModèle sauvegardé: {final_path}")
+    final_save_data = {
+        'model_state_dict': agent.state_dict(),
+        'iteration': num_iterations,
+        'global_step': total_timesteps,
+        'total_episodes': total_episodes,
+        'batch_size': batch_size,
+        'config_path': config_path if 'config_path' in locals() else 'config.yaml',
+        'training_completed': True
+    }
+    torch.save(final_save_data, final_path)
+    print(f"\nModèle sauvegardé: {final_path} (training completed)")
     print(f"{'='*70}\n")
     
     envs.close()

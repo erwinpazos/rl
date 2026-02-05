@@ -18,9 +18,9 @@ class CorridorGenerator:
         self.bump_size = (0.25, 0.25, 0.25)  # Taille des bumps
         self.hole_size = (0.25, 0.5, 0.025)  # Taille des trous
         
-        # Positions Y possibles (6 niveaux pour bumps, 3 pour trous)
+        # Positions Y possibles (6 niveaux pour bumps, 4 pour trous) - SYMÉTRIQUES
         self.bump_y_positions = [-1.25, -0.75, -0.25, 0.25, 0.75, 1.25]
-        self.hole_y_positions = [-0.5, 0.5, 1.0]
+        self.hole_y_positions = [-1.0, -0.5, 0.5, 1.0]
         
         # Pattern observé
         self.bump_spacing_mean = 2.0  # Espacement moyen des bumps
@@ -34,7 +34,7 @@ class CorridorGenerator:
             np.random.seed(seed)
         
         bumps = []
-        x = 2.25  # Position de départ (observée)
+        x = 5.0  # Position de départ (zone de sécurité avant 5m)
         y_cycle_pos = 0  # Position dans le cycle Y
         
         # Pattern cyclique observé: -1.25 → -0.75 → -0.25 → 0.25 → 0.75 → 1.25 → 0.75 → 0.25 → ...
@@ -43,7 +43,8 @@ class CorridorGenerator:
             0.75, 0.25, -0.25, -0.75, -1.25,        # Descente
         ]
         
-        while x < length - 1.0:
+        # NOUVEAU: Arrêter les bumps à 100m pour laisser une zone de succès
+        while x < min(length, 100.0) - 1.0:
             # Position Y selon le pattern cyclique
             y = y_pattern[y_cycle_pos % len(y_pattern)]
             bumps.append((x, y))
@@ -63,18 +64,36 @@ class CorridorGenerator:
         """Génère le pattern des trous basé sur l'analyse."""
         if seed is not None:
             random.seed(seed + 1000)  # Seed différent pour les trous
+            np.random.seed(seed + 1000)
         
         holes = []
-        x = 3.0  # Position de départ plus tôt (au lieu de 6.25)
-        y_cycle_pos = 0
+        x = 5.0  # Position de départ (zone de sécurité avant 5m)
+        previous_y = None  # Tracker la position Y précédente
         
-        # Pattern cyclique observé: -0.5 → 0.5 → 1.0 → -0.5 → ...
-        y_pattern = [-0.5, 0.5, 1.0]
+        # NOUVEAU: Positions Y possibles pour distribution aléatoire
+        y_positions = [-1.0, -0.5, 0.5, 1.0]
         
-        while x < length - 2.0:
-            # Position Y selon le pattern cyclique
-            y = y_pattern[y_cycle_pos % len(y_pattern)]
+        # NOUVEAU: Arrêter les trous à 100m pour laisser une zone de succès
+        while x < min(length, 100.0) - 2.0:
+            # NOUVEAU: Éviter que le trou suivant soit au même endroit Y que le précédent
+            if previous_y is not None:
+                # Créer une liste pondérée : position précédente = 10% de chance, autres = 30% chacune
+                available_positions = []
+                for y_pos in y_positions:
+                    if y_pos == previous_y:
+                        # Réduire la probabilité de répéter la même position Y
+                        available_positions.extend([y_pos] * 1)  # 1 occurrence = ~10% de chance
+                    else:
+                        # Positions différentes ont plus de chance
+                        available_positions.extend([y_pos] * 3)  # 3 occurrences = ~30% de chance chacune
+                
+                y = random.choice(available_positions)
+            else:
+                # Premier trou : position complètement aléatoire
+                y = random.choice(y_positions)
+            
             holes.append((x, y))
+            previous_y = y  # Mémoriser pour le prochain trou
             
             # Espacement réduit pour plus de densité
             if random.random() < 0.08:  # 8% de chance de gap plus grand (réduit de 15%)
@@ -83,7 +102,6 @@ class CorridorGenerator:
                 spacing = random.uniform(2.0, 3.0)  # Espacement de base réduit (au lieu de 4m fixe)
             
             x += spacing
-            y_cycle_pos += 1
         
         return holes
     
@@ -102,9 +120,9 @@ class CorridorGenerator:
         
         return tiles
     
-    def generate_corridor_xml(self, length: float = 100.0, width: float = 3.0, 
+    def generate_corridor_xml(self, length: float = 110.0, width: float = 3.0, 
                             seed: int = None, name: str = "generated_corridor",
-                            obstacle_type: str = "both") -> str:
+                            obstacle_type: str = "holes", bump_ratio: float = 0.0) -> str:
         """Génère le XML complet du corridor.
         
         Args:
@@ -112,18 +130,43 @@ class CorridorGenerator:
             width: Largeur du corridor en mètres  
             seed: Seed pour la génération aléatoire
             name: Nom du corridor
-            obstacle_type: Type d'obstacles ("holes", "bumps", "both")
+            obstacle_type: Type d'obstacles - DEPRECATED, utiliser bump_ratio à la place
+            bump_ratio: Ratio de bumps à ajouter (0.0 = aucun, 0.3 = 30%, 1.0 = 100%)
         """
         
-        # Générer les patterns selon le type d'obstacles
+        # Toujours générer les holes
+        holes = self.generate_hole_pattern(length, seed)
+        
+        # Générer les bumps selon le ratio
         bumps = []
-        holes = []
-        
-        if obstacle_type in ["bumps", "both"]:
-            bumps = self.generate_bump_pattern(length, seed)
-        
-        if obstacle_type in ["holes", "both"]:
-            holes = self.generate_hole_pattern(length, seed)
+        if bump_ratio > 0.0:
+            all_bumps = self.generate_bump_pattern(length, seed)
+            
+            # Filtrer les bumps qui sont trop proches des holes
+            filtered_bumps = []
+            for bump_x, bump_y in all_bumps:
+                # Vérifier si ce bump est trop proche d'un hole
+                too_close = False
+                for hole_x, hole_y in holes:
+                    # Distance entre bump et hole
+                    dx = abs(bump_x - hole_x)
+                    dy = abs(bump_y - hole_y)
+                    
+                    # Si le bump est à moins de 1m du hole en X et 0.6m en Y, on le vire
+                    if dx < 1.0 and dy < 0.6:
+                        too_close = True
+                        break
+                
+                if not too_close:
+                    filtered_bumps.append((bump_x, bump_y))
+            
+            # Prendre un échantillon réparti uniformément sur tout le corridor
+            num_bumps = int(len(filtered_bumps) * bump_ratio)
+            if num_bumps > 0 and len(filtered_bumps) > 0:
+                # Prendre 1 bump tous les N bumps pour répartir uniformément
+                step = len(filtered_bumps) / num_bumps
+                indices = [int(i * step) for i in range(num_bumps)]
+                bumps = [filtered_bumps[i] for i in indices]
         
         floor_tiles = self.generate_floor_tiles(length, width)
         
@@ -238,8 +281,8 @@ class CorridorGenerator:
         lines = [line for line in formatted_xml.split('\n') if line.strip()]
         return '\n'.join(lines)
     
-    def save_corridor(self, filename: str, length: float = 100.0, width: float = 3.0, 
-                     seed: int = None, obstacle_type: str = "both"):
+    def save_corridor(self, filename: str, length: float = 110.0, width: float = 3.0, 
+                     seed: int = None, obstacle_type: str = "holes", bump_ratio: float = 0.0):
         """Sauvegarde un corridor généré.
         
         Args:
@@ -247,20 +290,17 @@ class CorridorGenerator:
             length: Longueur du corridor en mètres
             width: Largeur du corridor en mètres
             seed: Seed pour la génération aléatoire
-            obstacle_type: Type d'obstacles ("holes", "bumps", "both")
+            obstacle_type: DEPRECATED - utiliser bump_ratio
+            bump_ratio: Ratio de bumps (0.0 à 1.0)
         """
-        xml_content = self.generate_corridor_xml(length, width, seed, filename.replace('.xml', ''), obstacle_type)
+        xml_content = self.generate_corridor_xml(length, width, seed, filename.replace('.xml', ''), obstacle_type, bump_ratio)
         
         with open(filename, 'w') as f:
             f.write(xml_content)
         
-        obstacle_desc = {
-            "holes": "trous seulement",
-            "bumps": "bumps seulement", 
-            "both": "trous et bumps"
-        }
+        obstacle_desc = f"holes + {int(bump_ratio*100)}% bumps"
         
-        print(f"Corridor sauvegardé: {filename} ({obstacle_desc.get(obstacle_type, obstacle_type)})")
+        print(f"Corridor sauvegardé: {filename} ({obstacle_desc})")
         return filename
 
 

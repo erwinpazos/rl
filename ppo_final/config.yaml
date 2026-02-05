@@ -49,8 +49,8 @@ network:
 
 # Paramètres de logging et sauvegarde
 logging:
-  log_interval: 2          # Afficher métriques toutes les N itérations
-  save_interval: 10        # Sauvegarder modèle toutes les N itérations
+  log_interval: 1          # Afficher métriques toutes les N itérations
+  save_interval: 5        # Sauvegarder modèle toutes les N itérations
   render_interval: 5       # Tester visuellement toutes les N itérations : render mujoco
   plot_interval: 5         # Mettre à jour graphiques toutes les N itérations
   batch_size_metrics: 20   # Taille batch pour calcul métriques des logs (graphiques)
@@ -60,45 +60,49 @@ curriculum:
   enabled: true            # Activer l'apprentissage progressif
   stabilization_steps: 20  # Steps de stabilisation au début
   
-  # Curriculum basé sur le pourcentage de corridors aléatoires
-  # Les couloirs fixes sont généré à partir d'une même seed
-  # Commence avec 0% aléatoire (que des corridors fixes) et augmente progressivement
-  # AJUSTÉ pour ~62 itérations (avec num_steps=4000)
-  random_corridor_schedule:
-    - iteration: 0         # Itération de début
-      random_percentage: 0.20  # 20% aléatoire = 80% corridor fixe
-    - iteration: 30        # À partir de l'itération 15 (au lieu de 50)
-      random_percentage: 0.3 # 30% aléatoire, 70% fixe
-    - iteration: 60        # À partir de l'itération 30 (au lieu de 100)
-      random_percentage: 0.50 # 50% aléatoire, 50% fixe
-    - iteration: 90        # À partir de l'itération 45 (au lieu de 150)
-      random_percentage: 0.75 # 75% aléatoire, 25% fixe
-    - iteration: 100        # À partir de l'itération 60 (au lieu de 200)
-      random_percentage: 1.0  # 100% aléatoire = comme avant
+  # Curriculum basé sur la distance moyenne des 2 derniers batches
+  # Progression automatique quand la performance atteint les seuils
   
-  # Curriculum basé sur le nombre de steps max par épisode
-  # Augmente progressivement la durée max des épisodes
-  # AJUSTÉ pour ~62 itérations (avec num_steps=4000)
+  # Phase 1: Holes only (0m → 100m)
+  # Phase 2: Bumps only (reset curriculum, 0m → 100m) 
+  # Phase 3: Both (reset curriculum, 0m → 100m)
+  
+  # Curriculum basé sur le pourcentage de corridors aléatoires (par phase)
+  random_corridor_schedule:
+    - distance: 0          # Distance moyenne ≥ 0m
+      random_percentage: 1.0  # 20% aléatoire = 80% corridor fixe
+    - distance: 20         # Distance moyenne ≥ 20m
+      random_percentage: 1.0   # 30% aléatoire, 70% fixe
+    - distance: 40         # Distance moyenne ≥ 40m
+      random_percentage: 1.0  # 50% aléatoire, 50% fixe
+    - distance: 60         # Distance moyenne ≥ 60m
+      random_percentage: 1.0  # 75% aléatoire, 25% fixe
+    - distance: 80         # Distance moyenne ≥ 80m
+      random_percentage: 1.0   # 100% aléatoire
+  
+  # Curriculum basé sur le nombre de steps max par épisode (par phase)
   max_steps_schedule:
-    - iteration: 0         # Itérations 0-14
+    - distance: 0          # Distance moyenne ≥ 0m
       max_steps: 3000      # 3000 steps max (plus facile)
-    - iteration: 30        # Itérations 15-29  
+    - distance: 20         # Distance moyenne ≥ 20m
       max_steps: 4000      # 4000 steps max (intermédiaire)
-    - iteration: 60        # Itérations 30-44
+    - distance: 40         # Distance moyenne ≥ 40m
       max_steps: 5000      # 5000 steps max (plus difficile)
-    - iteration: 90        # Itérations 45+
+    - distance: 60         # Distance moyenne ≥ 60m
       max_steps: 6000      # 6000 steps max (très difficile)
   
-  # Curriculum basé sur le type d'obstacles
-  # Progression graduelle de la difficulté des obstacles
-  # AJUSTÉ pour ~62 itérations (avec num_steps=4000)
-  obstacle_type_schedule:
-    - iteration: 0         # Itérations 0-9
-      obstacle_type: "holes"  # Seulement des trous (plus facile - apprendre à éviter de tomber)
-    - iteration: 80        # Itérations 10-19
-      obstacle_type: "bumps"  # Seulement des bumps (intermédiaire - apprendre à naviguer)
-    - iteration: 120        # Itérations 20+
-      obstacle_type: "both"   # Trous ET bumps (difficile - combinaison des deux)
+  # Curriculum basé sur le ratio de bumps (progression des phases)
+  # Toujours 100% holes + X% bumps en plus
+  bump_ratio_schedule:
+    - phase: 1             # Phase 1: Holes only (0% bumps)
+      bump_ratio: 0.0
+      distance_threshold: 60  # Passer à la phase 2 quand distance ≥ 60m
+    - phase: 2             # Phase 2: Holes + 30% bumps
+      bump_ratio: 0.3
+      distance_threshold: 60  # Passer à la phase 3 quand distance ≥ 60m
+    - phase: 3             # Phase 3: Holes + 60% bumps
+      bump_ratio: 0.6
+      distance_threshold: null # Phase finale
 
 # Paramètres physiques du robot (lus automatiquement depuis le XML)
 robot:
@@ -122,16 +126,17 @@ history:
   history_length: 4        # Nombre de positions passées à retenir
   # Dimension calculée : 4 frames × 6 valeurs (pos+vel) = 24 valeurs
 
-# Paramètres des corridors générés (partiellement utilisés)
+# Paramètres des corridors générés
 corridor:
-  corridor_length: 100.0   # Longueur du corridor (m) - hardcodé
-  corridor_width: 3.0      # Largeur du corridor (m) - hardcodé
+  corridor_length: 200.0   # Longueur physique du corridor (m) - avec zone sûre après 100m
+  corridor_width: 3.0      # Largeur du corridor (m)
+  success_distance: 100.0  # Distance pour succès (m) - objectif à atteindre
   cell_size_generation: 0.5  # Taille cellule pour génération - non utilisé
 
 # Système de récompenses et pénalités
 rewards:
   # Récompenses de terminaison (épisode se termine)
-  success_reward: 100.0      # Récompense pour atteindre la fin du corridor
+  success_reward: 0.0      # Récompense pour atteindre success_distance
   failure_penalty: -5.0     # Pénalité pour échecs (fell, flipped)
   
   # Récompenses continues (à chaque step)

@@ -132,6 +132,25 @@ class CorridorEnv(gym.Env):
         unique_seed = hash((os.getpid(), time.time(), id(self))) % (2**32)
         self.env_random = random.Random(unique_seed)
         
+        # CHARGER LA CONFIG EN PREMIER pour avoir corridor_length et corridor_width
+        self.max_steps = max_steps
+        self.corridor_length = 110.0  # Valeur par défaut
+        self.corridor_width = 3.0     # Valeur par défaut
+        self.success_distance = 100.0 # Valeur par défaut
+        
+        # Paramètres de vision (par défaut si pas de config)
+        self.cell_size = 0.1
+        self.vision_front = 5.2
+        self.vision_behind = 0.5
+        self.vision_left = 1.5
+        self.vision_right = 1.5
+        self.history_length = 4
+        self.history_interval = 15
+        
+        # Charger config pour override les valeurs par défaut
+        self.load_config_if_available()
+        
+        # MAINTENANT générer le modèle avec les bonnes valeurs
         if self.use_random_corridor:
             # Générer premier corridor aléatoire avec le nouveau système
             from corridor_generator_similar import CorridorGenerator
@@ -145,22 +164,7 @@ class CorridorEnv(gym.Env):
         
         self.data = mujoco.MjData(self.model)
         
-        # Paramètres de base
-        self.max_steps = max_steps
-        self.corridor_length = 100.0
-        self.corridor_width = 3.0
-        
-        # Paramètres de vision (par défaut si pas de config)
-        self.cell_size = 0.1
-        self.vision_front = 5.2
-        self.vision_behind = 0.5
-        self.vision_left = 1.5
-        self.vision_right = 1.5
-        self.history_length = 4
-        self.history_interval = 15
-        
         # Calculer dimensions dynamiquement
-        self.load_config_if_available()
         self._calculate_vision_dimensions()
         
     def load_config_if_available(self):
@@ -200,6 +204,18 @@ class CorridorEnv(gym.Env):
                     self.max_speed = 1.0
                     self.spawn_angle_max_deg = 60.0
                 
+                # Charger paramètres des corridors
+                if 'corridor' in config:
+                    corridor_config = config['corridor']
+                    self.corridor_length = corridor_config.get('corridor_length', 110.0)
+                    self.corridor_width = corridor_config.get('corridor_width', 3.0)
+                    self.success_distance = corridor_config.get('success_distance', 100.0)
+                else:
+                    # Valeurs par défaut
+                    self.corridor_length = 110.0
+                    self.corridor_width = 3.0
+                    self.success_distance = 100.0
+                
                 # Charger paramètres de récompenses
                 if 'rewards' in config:
                     rewards_config = config['rewards']
@@ -222,6 +238,9 @@ class CorridorEnv(gym.Env):
                 self.max_steering_angle = 30.0
                 self.max_speed = 1.0
                 self.spawn_angle_max_deg = 60.0
+                self.corridor_length = 110.0
+                self.corridor_width = 3.0
+                self.success_distance = 100.0
                 self.success_reward = 100.0
                 self.failure_penalty = -10.0
                 self.progress_multiplier = 2.0
@@ -357,6 +376,14 @@ class CorridorEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         
+        # Vérifier si on doit forcer la régénération (changement d'obstacle_type)
+        force_regen = getattr(self, '_force_regeneration', False)
+        if force_regen:
+            # Supprimer le flag et forcer la génération
+            self._force_regeneration = False
+            if hasattr(self, '_fixed_model_generated'):
+                delattr(self, '_fixed_model_generated')
+        
         # Décider si on génère un nouveau corridor ou on réutilise le modèle existant
         should_generate_new_corridor = False
         use_fixed_seed_for_generation = False
@@ -385,7 +412,7 @@ class CorridorEnv(gym.Env):
                     else:
                         should_generate_new_corridor = False  # Réutiliser le modèle existant
         
-        if should_generate_new_corridor:
+        if should_generate_new_corridor or force_regen:
             # Générer un nouveau corridor
             if hasattr(self, 'corridor_generator'):
                 # Utiliser le nouveau générateur avec la décision prise
@@ -669,10 +696,10 @@ class CorridorEnv(gym.Env):
         terminated = False
         info = {}
         
-        # Succès: fin du corridor
-        if x >= self.corridor_length:
-            info['reason'] = 'success'
-            return self.success_reward, True, info
+        # Succès: atteindre la distance de succès configurée (PAS DE TERMINAISON)
+        # if x >= self.success_distance:
+        #     info['reason'] = 'success'
+        #     return self.success_reward, True, info
         
         # Échec: tombé dans un trou
         if z < self.fell_threshold:
@@ -756,33 +783,25 @@ class CorridorEnv(gym.Env):
         if use_fixed_seed is None:
             use_fixed_seed = self.use_fixed_seed
         
+        # Convertir obstacle_type en bump_ratio
+        bump_ratio = getattr(self, 'bump_ratio', 0.0)
+        
         # Générer les paramètres du corridor
         if use_fixed_seed:
             # Seed fixe pour reproductibilité
-            if self.obstacle_type == "holes":
-                seed = 12345
-                self.current_corridor_type = "holes-fixed"
-            elif self.obstacle_type == "bumps":
-                seed = 67890
-                self.current_corridor_type = "bumps-fixed"
-            else:  # "both"
-                seed = 11111
-                self.current_corridor_type = "both-fixed"
+            seed = 12345 + int(bump_ratio * 1000)  # Seed différent selon bump_ratio
+            self.current_corridor_type = f"holes+{int(bump_ratio*100)}%bumps-fixed"
             
-            length = 100.0
-            width = 3.0
+            length = self.corridor_length  # UTILISER LA CONFIG
+            width = self.corridor_width    # UTILISER LA CONFIG
         else:
             # Seed aléatoire
             seed = np.random.randint(0, 10000)
-            length = np.random.uniform(80.0, 120.0)
-            width = np.random.uniform(2.5, 3.5)
+            # Varier autour de la longueur configurée (±10%)
+            length = np.random.uniform(self.corridor_length * 0.9, self.corridor_length * 1.1)
+            width = np.random.uniform(self.corridor_width * 0.85, self.corridor_width * 1.15)
             
-            if self.obstacle_type == "holes":
-                self.current_corridor_type = "holes-random"
-            elif self.obstacle_type == "bumps":
-                self.current_corridor_type = "bumps-random"
-            else:  # "both"
-                self.current_corridor_type = "both-random"
+            self.current_corridor_type = f"holes+{int(bump_ratio*100)}%bumps-random"
         
         # Générer XML en mémoire (pas de sauvegarde fichier)
         corridor_xml_str = self.corridor_generator.generate_corridor_xml(
@@ -790,7 +809,8 @@ class CorridorEnv(gym.Env):
             width=width, 
             seed=seed, 
             name="random_corridor", 
-            obstacle_type=self.obstacle_type
+            obstacle_type="holes",  # Toujours holes
+            bump_ratio=bump_ratio   # + ratio de bumps
         )
         corridor_root = ET.fromstring(corridor_xml_str)
         
@@ -994,38 +1014,46 @@ class CorridorEnv(gym.Env):
         """Ajuster dynamiquement la durée max des épisodes."""
         self.max_steps = new_max_steps
     
-    def update_curriculum_params(self, random_percentage=None, obstacle_type=None, max_steps=None):
+    def update_curriculum_params(self, random_percentage=None, obstacle_type=None, max_steps=None, bump_ratio=None):
         """Mettre à jour les paramètres du curriculum pour cet environnement."""
         force_regeneration = False
         
         if random_percentage is not None:
             self.random_percentage = random_percentage
         
-        if obstacle_type is not None:
-            old_obstacle_type = getattr(self, 'obstacle_type', None)
-            if obstacle_type != old_obstacle_type:
-                # Si le type d'obstacles change, forcer la régénération
-                self.obstacle_type = obstacle_type
+        if bump_ratio is not None:
+            old_bump_ratio = getattr(self, 'bump_ratio', 0.0)
+            if bump_ratio != old_bump_ratio:
+                # Si le ratio de bumps change, forcer la régénération
+                self.bump_ratio = bump_ratio
                 force_regeneration = True
                 
                 # Mettre à jour current_corridor_type immédiatement pour l'affichage
                 if hasattr(self, 'current_corridor_type'):
                     old_corridor_type = self.current_corridor_type
                     if 'random' in old_corridor_type:
-                        self.current_corridor_type = f"{obstacle_type}-random"
+                        self.current_corridor_type = f"holes+{int(bump_ratio*100)}%bumps-random"
                     else:
-                        self.current_corridor_type = f"{obstacle_type}-fixed"
+                        self.current_corridor_type = f"holes+{int(bump_ratio*100)}%bumps-fixed"
                 else:
-                    self.current_corridor_type = f"{obstacle_type}-unknown"
+                    self.current_corridor_type = f"holes+{int(bump_ratio*100)}%bumps-unknown"
             else:
-                self.obstacle_type = obstacle_type
+                self.bump_ratio = bump_ratio
+        
+        # Backward compatibility avec obstacle_type (deprecated)
+        if obstacle_type is not None:
+            self.obstacle_type = obstacle_type
             
         if max_steps is not None:
             self.max_steps = max_steps
         
-        # Forcer la régénération du modèle fixe si le type d'obstacles a changé
-        if force_regeneration and hasattr(self, '_fixed_model_generated'):
-            delattr(self, '_fixed_model_generated')
+        # Forcer la régénération du corridor au prochain reset
+        if force_regeneration:
+            # Supprimer le modèle fixe en cache pour forcer régénération
+            if hasattr(self, '_fixed_model_generated'):
+                delattr(self, '_fixed_model_generated')
+            # Marquer qu'on doit régénérer au prochain reset
+            self._force_regeneration = True
     
     def close(self):
         pass
