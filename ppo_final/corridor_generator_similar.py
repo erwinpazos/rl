@@ -16,7 +16,7 @@ class CorridorGenerator:
         self.cell_size = 0.5  # Taille d'une cellule de grille
         self.floor_tile_size = (0.25, 0.25, 0.025)  # Taille des tuiles de sol
         self.bump_size = (0.25, 0.25, 0.25)  # Taille des bumps
-        self.hole_size = (0.25, 0.5, 0.025)  # Taille des trous
+        self.hole_size = (0.25, 0.5, 0.025)  # Taille des trous (2 tuiles de large Y, 1 tuile de long X)
         
         # Positions Y possibles (6 niveaux pour bumps, 4 pour trous) - SYMÉTRIQUES
         self.bump_y_positions = [-1.25, -0.75, -0.25, 0.25, 0.75, 1.25]
@@ -131,42 +131,68 @@ class CorridorGenerator:
             seed: Seed pour la génération aléatoire
             name: Nom du corridor
             obstacle_type: Type d'obstacles - DEPRECATED, utiliser bump_ratio à la place
-            bump_ratio: Ratio de bumps à ajouter (0.0 = aucun, 0.3 = 30%, 1.0 = 100%)
+            bump_ratio: Ratio de bumps à ajouter (0.0 = aucun, 0.5 = 1 sur 2, 1.0 = 100%)
+                       Les bumps sont répartis uniformément (ex: 0.5 = bump, vide, bump, vide...)
         """
         
-        # Toujours générer les holes
+        # Toujours générer les holes en premier
         holes = self.generate_hole_pattern(length, seed)
         
-        # Générer les bumps selon le ratio
+        # Générer les bumps entre les holes
         bumps = []
-        if bump_ratio > 0.0:
-            all_bumps = self.generate_bump_pattern(length, seed)
+        if bump_ratio > 0.0 and len(holes) > 1:
+            if seed is not None:
+                random.seed(seed)
+                np.random.seed(seed)
             
-            # Filtrer les bumps qui sont trop proches des holes
-            filtered_bumps = []
-            for bump_x, bump_y in all_bumps:
-                # Vérifier si ce bump est trop proche d'un hole
-                too_close = False
-                for hole_x, hole_y in holes:
-                    # Distance entre bump et hole
-                    dx = abs(bump_x - hole_x)
-                    dy = abs(bump_y - hole_y)
+            # Trier les holes par position X
+            holes_sorted = sorted(holes, key=lambda h: h[0])
+            
+            # Positions Y possibles pour les bumps
+            y_positions = [-1.25, -0.75, -0.25, 0.25, 0.75, 1.25]
+            
+            # Calculer le nombre exact de bumps à placer
+            num_spaces = len(holes_sorted) - 1  # Nombre d'espaces entre holes
+            num_bumps = int(num_spaces * bump_ratio)  # Nombre exact de bumps
+            
+            # Répartir uniformément les bumps sur les espaces
+            # Ex: 0.5 = prendre 1 espace sur 2, 0.33 = prendre 1 espace sur 3
+            if num_bumps > 0:
+                step = num_spaces / num_bumps  # Espacement entre bumps
+                bump_indices = [int(i * step) for i in range(num_bumps)]
+            else:
+                bump_indices = []
+            
+            previous_bump_y = None  # Tracker la position Y du bump précédent
+            
+            # Pour chaque espace qui doit avoir un bump
+            for bump_idx in bump_indices:
+                if bump_idx < num_spaces:
+                    hole1_x, hole1_y = holes_sorted[bump_idx]
+                    hole2_x, hole2_y = holes_sorted[bump_idx + 1]
                     
-                    # Si le bump est à moins de 1m du hole en X et 0.6m en Y, on le vire
-                    if dx < 1.0 and dy < 0.6:
-                        too_close = True
-                        break
-                
-                if not too_close:
-                    filtered_bumps.append((bump_x, bump_y))
-            
-            # Prendre un échantillon réparti uniformément sur tout le corridor
-            num_bumps = int(len(filtered_bumps) * bump_ratio)
-            if num_bumps > 0 and len(filtered_bumps) > 0:
-                # Prendre 1 bump tous les N bumps pour répartir uniformément
-                step = len(filtered_bumps) / num_bumps
-                indices = [int(i * step) for i in range(num_bumps)]
-                bumps = [filtered_bumps[i] for i in indices]
+                    # Calculer la position X au milieu entre les deux holes
+                    middle_x = (hole1_x + hole2_x) / 2.0
+                    
+                    # Choisir une position Y avec pondération pour éviter répétition
+                    if previous_bump_y is not None:
+                        # Créer une liste pondérée : position précédente = 10% de chance, autres = 18% chacune
+                        available_positions = []
+                        for y_pos in y_positions:
+                            if y_pos == previous_bump_y:
+                                # Réduire la probabilité de répéter la même position Y
+                                available_positions.extend([y_pos] * 1)  # 1 occurrence = ~10% de chance
+                            else:
+                                # Positions différentes ont plus de chance
+                                available_positions.extend([y_pos] * 2)  # 2 occurrences = ~18% de chance chacune
+                        
+                        bump_y = random.choice(available_positions)
+                    else:
+                        # Premier bump : position complètement aléatoire
+                        bump_y = random.choice(y_positions)
+                    
+                    bumps.append((middle_x, bump_y))
+                    previous_bump_y = bump_y  # Mémoriser pour le prochain bump
         
         floor_tiles = self.generate_floor_tiles(length, width)
         
@@ -177,12 +203,17 @@ class CorridorGenerator:
                 # Vérifier si cette tuile est dans une zone de trou
                 is_in_hole = False
                 for hole_x, hole_y in holes:
-                    # Distance entre la tuile et le centre du trou
-                    dx = abs(tile_x - hole_x)
+                    # Arrondir la position du trou à la grille des tuiles (0.25, 0.75, 1.25...)
+                    # pour s'assurer qu'on supprime exactement les bonnes tuiles
+                    hole_x_grid = round((hole_x - 0.25) / 0.5) * 0.5 + 0.25
+                    
+                    # Distance entre la tuile et le centre du trou aligné sur la grille
+                    dx = abs(tile_x - hole_x_grid)
                     dy = abs(tile_y - hole_y)
                     
-                    # Si la tuile est dans la zone du trou (hole_size = 0.25 x 0.5)
-                    if dx <= self.hole_size[0] and dy <= self.hole_size[1]:
+                    # Un trou fait 1 tuile en X (0.5m) et 2 tuiles en Y (0.5m)
+                    # Donc on supprime les tuiles à dx < 0.25m (1 seule tuile) et dy < 0.5m (2 tuiles)
+                    if dx < 0.25 and dy < 0.5:
                         is_in_hole = True
                         break
                 
@@ -229,26 +260,28 @@ class CorridorGenerator:
         # Worldbody
         worldbody = ET.SubElement(root, 'worldbody')
         
-        # Murs (basés sur l'analyse)
+        # Murs (position au centre de la box, donc décaler de wall_thickness/2)
         wall_thickness = 0.025
         wall_height = 2.5
         wall_length = length / 2
         wall_center_x = length / 2
         
-        # Mur gauche
+        # Mur gauche (centre à -width/2, donc le mur va de -width/2-thickness à -width/2+thickness)
+        # On veut que le bord intérieur soit à -width/2, donc centre à -width/2 + wall_thickness/2
         wall_left = ET.SubElement(worldbody, 'geom')
         wall_left.set('name', 'wall_left')
         wall_left.set('type', 'box')
         wall_left.set('size', f'{wall_length:.3f} {wall_thickness:.3f} {wall_height:.3f}')
-        wall_left.set('pos', f'{wall_center_x:.3f} {-width/2 - wall_thickness:.3f} {wall_height:.3f}')
+        wall_left.set('pos', f'{wall_center_x:.3f} {-width/2 + wall_thickness/2:.3f} {wall_height:.3f}')
         wall_left.set('material', 'mat_wall')
         
-        # Mur droit
+        # Mur droit (centre à +width/2, donc le mur va de +width/2-thickness à +width/2+thickness)
+        # On veut que le bord intérieur soit à +width/2, donc centre à +width/2 - wall_thickness/2
         wall_right = ET.SubElement(worldbody, 'geom')
         wall_right.set('name', 'wall_right')
         wall_right.set('type', 'box')
         wall_right.set('size', f'{wall_length:.3f} {wall_thickness:.3f} {wall_height:.3f}')
-        wall_right.set('pos', f'{wall_center_x:.3f} {width/2 + wall_thickness:.3f} {wall_height:.3f}')
+        wall_right.set('pos', f'{wall_center_x:.3f} {width/2 - wall_thickness/2:.3f} {wall_height:.3f}')
         wall_right.set('material', 'mat_wall')
         
         # Tuiles de sol (avec trous créés par suppression de tuiles)

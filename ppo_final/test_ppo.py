@@ -65,7 +65,8 @@ class Agent(nn.Module):
         
         # Calculer dimensions dynamiquement depuis l'observation
         # Créer un environnement temporaire pour obtenir les dimensions exactes
-        temp_env = CorridorEnv()
+        # Utiliser corridor_xml=None pour forcer la génération aléatoire (pas de dépendance fichier)
+        temp_env = CorridorEnv(corridor_xml=None)
         self.history_dim = temp_env.history_dim
         self.grid_dim = temp_env.grid_dim
         self.grid_rows = temp_env.grid_rows
@@ -217,8 +218,8 @@ def display_vision(obs, step, ret, env):
     print("=" * 60)
 
 
-def make_env(config=None):
-    """Factory pour environnement avec configuration."""
+def make_env(config=None, bump_ratio=None):
+    """Factory pour environnement avec configuration et bump_ratio."""
     if config and 'environment' in config:
         env_config = config['environment']
         max_steps = env_config.get('max_steps', 1000)
@@ -231,11 +232,16 @@ def make_env(config=None):
     
     # Utiliser corridor_xml=None pour générer aléatoirement
     corridor_xml = None if use_random else corridor_xml_file
-        
-    return CorridorEnv(max_steps=max_steps, corridor_xml=corridor_xml)
+    
+    # Utiliser bump_ratio par défaut si pas fourni
+    env_bump_ratio = bump_ratio if bump_ratio is not None else 0.0
+    
+    env = CorridorEnv(max_steps=max_steps, corridor_xml=corridor_xml, obstacle_type="holes")
+    env.bump_ratio = env_bump_ratio  # Initialiser bump_ratio
+    return env
 
 
-def test(model_path, num_episodes, render, show_vision, config_path="config.yaml", corridor_xml=None):
+def test(model_path, num_episodes, render, show_vision, config_path="config.yaml", corridor_xml=None, bump_ratio=None):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     # Charger configuration
@@ -245,13 +251,22 @@ def test(model_path, num_episodes, render, show_vision, config_path="config.yaml
     if corridor_xml:
         # Override avec corridor spécifique
         env = CorridorEnv(corridor_xml=corridor_xml)
+        if bump_ratio is not None:
+            env.bump_ratio = bump_ratio
     else:
-        env = make_env(config)
+        env = make_env(config, bump_ratio=bump_ratio)
     
     obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
     agent = Agent(obs_dim, act_dim, config).to(device)
-    agent.load_state_dict(torch.load(model_path, map_location=device))
+    
+    # Charger le checkpoint (peut contenir model_state_dict ou être directement le state_dict)
+    checkpoint = torch.load(model_path, map_location=device)
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        agent.load_state_dict(checkpoint['model_state_dict'])
+    else:
+        agent.load_state_dict(checkpoint)
+    
     agent.eval()
     
     print(f"Model: {model_path}")
@@ -262,6 +277,10 @@ def test(model_path, num_episodes, render, show_vision, config_path="config.yaml
     else:
         corridor_file = config.get('environment', {}).get('corridor_xml', 'corridor_3x100_no_full_obstacles.xml')
         print(f"Corridor: {corridor_file} (fixe)")
+    
+    # Afficher le bump_ratio
+    bump_pct = (bump_ratio if bump_ratio is not None else 0.0) * 100
+    print(f"Obstacles: 100% holes + {bump_pct:.0f}% bumps")
     print(f"Device: {device}\n")
     
     returns = []
@@ -367,6 +386,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default=None)
     parser.add_argument("--config", type=str, default="config.yaml", help="Fichier de configuration YAML")
     parser.add_argument("--corridor", type=str, default=None, help="Corridor XML fixe (défaut: selon config)")
+    parser.add_argument("--bump", type=float, default=None, help="Pourcentage de bumps en plus des holes (0.0-1.0, ex: 0.3 = 30%%)")
     parser.add_argument("--episodes", type=int, default=5)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--show-vision", action="store_true")
@@ -382,4 +402,4 @@ if __name__ == "__main__":
         model_path = models[0]
         print(f"Auto-détecté: {model_path}\n")
     
-    test(model_path, args.episodes, args.render, args.show_vision, args.config, args.corridor)
+    test(model_path, args.episodes, args.render, args.show_vision, args.config, args.corridor, args.bump)

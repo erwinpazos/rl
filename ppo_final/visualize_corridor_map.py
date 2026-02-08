@@ -10,6 +10,8 @@ from mujoco import viewer
 import time
 import os
 import sys
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider, Button
 
 # Importer le générateur local
 try:
@@ -18,7 +20,7 @@ except ImportError:
     print("⚠️  Générateur de corridor non trouvé. Option --random désactivée.")
     CorridorGenerator = None
 
-def generate_random_corridor(seed=None):
+def generate_random_corridor(seed=None, bump_ratio=None, hole_ratio=None):
     """Génère un corridor aléatoire temporaire."""
     if CorridorGenerator is None:
         print("❌ Générateur de corridor non disponible!")
@@ -27,17 +29,27 @@ def generate_random_corridor(seed=None):
     if seed is None:
         seed = np.random.randint(0, 10000)
     
+    # Valeurs par défaut
+    if bump_ratio is None:
+        bump_ratio = 0.0
+    if hole_ratio is None:
+        hole_ratio = 1.0
+    
     print(f"🎲 Génération d'un corridor aléatoire (seed={seed})...")
+    print(f"   Bump ratio: {bump_ratio*100:.0f}%")
+    print(f"   Hole ratio: {hole_ratio*100:.0f}%")
     
     generator = CorridorGenerator()
     temp_filename = f"temp_random_corridor_{seed}.xml"
     
     try:
-        # Générer avec des paramètres variés
-        length = np.random.uniform(80.0, 120.0)
-        width = np.random.uniform(2.5, 3.5)
+        # Utiliser les dimensions du config (200m x 3m)
+        length = 200.0
+        width = 3.0
         
-        generator.save_corridor(temp_filename, length, width, seed)
+        # Passer bump_ratio directement à save_corridor
+        generator.save_corridor(temp_filename, length, width, seed, 
+                               obstacle_type="holes", bump_ratio=bump_ratio)
         
         # Statistiques
         bumps = generator.generate_bump_pattern(length, seed)
@@ -410,6 +422,212 @@ def test_multiple_positions(corridor_xml="corridor_100.xml"):
         if i < len(positions) - 1:
             input("Appuyez sur Entrée pour la position suivante...")
 
+
+def visualize_interactive_matplotlib(corridor_xml="corridor_100.xml", initial_x=10.0, initial_y=0.0, initial_angle=0.0):
+    """Visualisation interactive avec matplotlib."""
+    env = CorridorEnv(corridor_xml=corridor_xml)
+    
+    # Variables pour stocker l'état
+    state = {
+        'x': initial_x,
+        'y': initial_y,
+        'angle': np.radians(initial_angle),
+        'env': env
+    }
+    
+    # Créer la figure
+    fig = plt.figure(figsize=(16, 10))
+    fig.suptitle(f'Vision CNN Interactive - {corridor_xml}', fontsize=16, fontweight='bold')
+    
+    # 3 subplots pour les 3 vues
+    ax_obstacles = plt.subplot(2, 3, 1)
+    ax_holes = plt.subplot(2, 3, 2)
+    ax_combined = plt.subplot(2, 3, 3)
+    
+    # Titres
+    ax_obstacles.set_title('Canal 0 - Obstacles (bumps + murs)', fontweight='bold', fontsize=12)
+    ax_holes.set_title('Canal 1 - Trous (holes)', fontweight='bold', fontsize=12)
+    ax_combined.set_title('Vue Combinée', fontweight='bold', fontsize=12)
+    
+    # Info text
+    info_text = fig.text(0.5, 0.95, '', ha='center', fontsize=10, family='monospace')
+    
+    # Sliders
+    slider_ax_x = plt.axes([0.15, 0.35, 0.7, 0.02])
+    slider_ax_y = plt.axes([0.15, 0.30, 0.7, 0.02])
+    slider_ax_angle = plt.axes([0.15, 0.25, 0.7, 0.02])
+    
+    slider_x = Slider(slider_ax_x, 'Position X (m)', 0, 100, valinit=initial_x, valstep=0.5)
+    slider_y = Slider(slider_ax_y, 'Position Y (m)', -1.5, 1.5, valinit=initial_y, valstep=0.1)
+    slider_angle = Slider(slider_ax_angle, 'Angle (°)', -180, 180, valinit=initial_angle, valstep=5)
+    
+    def update(val):
+        """Met à jour la visualisation."""
+        state['x'] = slider_x.val
+        state['y'] = slider_y.val
+        state['angle'] = np.radians(slider_angle.val)
+        
+        # Reset environnement
+        env.reset()
+        
+        # Positionner le robot
+        env.data.qpos[0] = state['x']
+        env.data.qpos[1] = state['y']
+        env.data.qpos[2] = 0.45
+        env.data.qpos[3] = np.cos(state['angle'] / 2)
+        env.data.qpos[4] = 0
+        env.data.qpos[5] = 0
+        env.data.qpos[6] = np.sin(state['angle'] / 2)
+        
+        # Mettre à jour l'historique
+        env._update_position_history()
+        
+        # Obtenir observation
+        obs = env._get_obs()
+        
+        # Extraire la grille
+        grid = obs[7+env.history_dim:].reshape(env.grid_rows, env.grid_cols, 2)
+        
+        # Mettre à jour l'info
+        info_str = (f"Position: x={state['x']:.2f}m, y={state['y']:.2f}m, angle={np.degrees(state['angle']):.1f}° | "
+                   f"Grille: {env.grid_rows}×{env.grid_cols}×2 | Cellule: {env.cell_size}m | "
+                   f"Vision: {env.vision_length}m×{env.vision_width}m")
+        info_text.set_text(info_str)
+        
+        # Dessiner les 3 vues
+        draw_channel(ax_obstacles, grid[:, :, 0], env, 'Greys_r')
+        draw_channel(ax_holes, grid[:, :, 1], env, 'Greys_r')
+        draw_combined_view(ax_combined, grid, env)
+        
+        fig.canvas.draw_idle()
+    
+    def draw_channel(ax, channel_data, env, cmap):
+        """Dessine un canal."""
+        ax.clear()
+        ax.imshow(channel_data, cmap=cmap, interpolation='nearest', vmin=0, vmax=1)
+        
+        # Marquer le robot
+        robot_row = env.robot_row_in_grid
+        robot_col = env.robot_col_in_grid
+        
+        ax.plot(robot_col, robot_row, 'go', markersize=10, markeredgecolor='darkgreen', markeredgewidth=2)
+        
+        # Flèche direction (vers le haut = forward, donc dy négatif)
+        arrow_length = 3
+        ax.arrow(robot_col, robot_row, 0, arrow_length,  # dy positif = vers le bas dans l'image
+                head_width=1.5, head_length=1, fc='yellow', ec='orange', linewidth=2)
+        
+        ax.set_xlim(-0.5, channel_data.shape[1]-0.5)
+        ax.set_ylim(channel_data.shape[0]-0.5, -0.5)
+        ax.set_xlabel('Colonne')
+        ax.set_ylabel('Ligne (distance)')
+        ax.grid(True, alpha=0.3)
+    
+    def draw_combined_view(ax, grid, env):
+        """Dessine la vue combinée."""
+        ax.clear()
+        
+        rows, cols = grid.shape[0], grid.shape[1]
+        
+        # Créer une image RGB
+        img = np.ones((rows, cols, 3))
+        
+        for i in range(rows):
+            for j in range(cols):
+                obstacle = grid[i, j, 0]
+                hole = grid[i, j, 1]
+                
+                if obstacle > 0.5 and hole > 0.5:
+                    img[i, j] = [0.5, 0, 0.5]  # Purple (erreur)
+                elif obstacle > 0.5:
+                    img[i, j] = [1, 0, 0]  # Rouge (obstacle)
+                elif hole > 0.5:
+                    img[i, j] = [0, 0, 1]  # Bleu (trou)
+                else:
+                    img[i, j] = [1, 1, 1]  # Blanc (sol)
+        
+        ax.imshow(img, interpolation='nearest')
+        
+        # Marquer le robot
+        robot_row = env.robot_row_in_grid
+        robot_col = env.robot_col_in_grid
+        
+        ax.plot(robot_col, robot_row, 'go', markersize=10, markeredgecolor='darkgreen', markeredgewidth=2)
+        
+        # Flèche direction (vers le haut = forward, donc dy négatif)
+        arrow_length = 3
+        ax.arrow(robot_col, robot_row, 0, arrow_length,  # dy positif = vers le bas dans l'image
+                head_width=1.5, head_length=1, fc='yellow', ec='orange', linewidth=2)
+        
+        ax.set_xlim(-0.5, cols-0.5)
+        ax.set_ylim(rows-0.5, -0.5)
+        ax.set_xlabel('Colonne')
+        ax.set_ylabel('Ligne (distance)')
+        ax.grid(True, alpha=0.3)
+    
+    def random_position(event):
+        """Position aléatoire."""
+        slider_x.set_val(np.random.uniform(5, 95))
+        slider_y.set_val(np.random.uniform(-1.0, 1.0))
+        slider_angle.set_val(np.random.uniform(-180, 180))
+    
+    def reset_position(event):
+        """Reset à la position initiale."""
+        slider_x.set_val(10.0)
+        slider_y.set_val(0.0)
+        slider_angle.set_val(0.0)
+    
+    # Callbacks
+    slider_x.on_changed(update)
+    slider_y.on_changed(update)
+    slider_angle.on_changed(update)
+    
+    # Boutons
+    button_ax_random = plt.axes([0.15, 0.18, 0.15, 0.04])
+    button_ax_reset = plt.axes([0.35, 0.18, 0.15, 0.04])
+    button_ax_render = plt.axes([0.55, 0.18, 0.15, 0.04])
+    
+    button_random = Button(button_ax_random, 'Position Aléatoire')
+    button_reset = Button(button_ax_reset, 'Reset (x=10, y=0, θ=0)')
+    button_render = Button(button_ax_render, 'Ouvrir Rendu 3D')
+    
+    button_random.on_clicked(random_position)
+    button_reset.on_clicked(reset_position)
+    
+    def open_3d_render(event):
+        """Ouvre le rendu 3D MuJoCo dans un thread séparé."""
+        import threading
+        
+        def render_thread():
+            try:
+                print("\n🎬 Ouverture du rendu 3D MuJoCo...")
+                render_corridor_3d(corridor_xml, state['x'], state['y'], state['angle'])
+            except Exception as e:
+                print(f"❌ Erreur rendu 3D: {e}")
+        
+        thread = threading.Thread(target=render_thread, daemon=True)
+        thread.start()
+    
+    button_render.on_clicked(open_3d_render)
+    
+    # Légende
+    legend_text = (
+        "Canal 0 (bumps+murs): Noir=obstacle, Blanc=libre | "
+        "Canal 1 (holes): Noir=trou, Blanc=sol | "
+        "Combiné: Rouge=bump/mur, Bleu=trou, Blanc=sol navigable, Vert=robot, Flèche=direction"
+    )
+    fig.text(0.5, 0.14, legend_text, ha='center', fontsize=9, 
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    # Première visualisation
+    update(None)
+    
+    # Afficher
+    plt.tight_layout(rect=[0, 0.2, 1, 0.93])
+    plt.show()
+    env.close()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Visualise l'entrée exacte du CNN avec 2 canaux")
     parser.add_argument("--corridor", type=str, default="corridor_3x100_no_full_obstacles.xml", 
@@ -417,6 +635,8 @@ if __name__ == "__main__":
     parser.add_argument("--random", action="store_true",
                        help="Génère et utilise un corridor aléatoire au lieu du corridor fixe")
     parser.add_argument("--seed", type=int, help="Seed pour la génération aléatoire (défaut: aléatoire)")
+    parser.add_argument("--bump-ratio", type=float, help="Ratio de bumps (0.0-1.0, ex: 0.5 = 50%% bumps)")
+    parser.add_argument("--hole-ratio", type=float, help="Ratio de trous (0.0-1.0, ex: 1.0 = 100%% holes)")
     parser.add_argument("--x", type=float, help="Position X du robot (défaut: aléatoire)")
     parser.add_argument("--y", type=float, help="Position Y du robot (défaut: aléatoire)")
     parser.add_argument("--angle", type=float, help="Angle du robot en DEGRÉS (défaut: aléatoire)")
@@ -426,6 +646,8 @@ if __name__ == "__main__":
                        help="Affiche la carte complète du corridor")
     parser.add_argument("--render", action="store_true",
                        help="Ouvre le rendu 3D MuJoCo du corridor")
+    parser.add_argument("--interactive", action="store_true",
+                       help="Mode interactif avec matplotlib (sliders)")
     args = parser.parse_args()
     
     # Déterminer le corridor à utiliser
@@ -433,15 +655,28 @@ if __name__ == "__main__":
     temp_file = None
     
     # Si --random OU --seed est fourni, générer un corridor
-    if args.random or args.seed is not None:
-        temp_file = generate_random_corridor(args.seed)
+    if args.random or args.seed is not None or args.bump_ratio is not None or args.hole_ratio is not None:
+        temp_file = generate_random_corridor(args.seed, args.bump_ratio, args.hole_ratio)
         if temp_file:
             corridor_xml = temp_file
         else:
             print("⚠️  Utilisation du corridor par défaut à la place")
     
     try:
-        if args.render:
+        if args.interactive:
+            # Mode interactif matplotlib
+            initial_x = args.x if args.x is not None else 10.0
+            initial_y = args.y if args.y is not None else 0.0
+            initial_angle = args.angle if args.angle is not None else 0.0
+            visualize_interactive_matplotlib(corridor_xml, initial_x, initial_y, initial_angle)
+            
+            # Si --render est aussi spécifié, ouvrir le rendu 3D après
+            if args.render:
+                print("\n🎬 Ouverture du rendu 3D...")
+                angle_rad = np.radians(initial_angle)
+                render_corridor_3d(corridor_xml, initial_x, initial_y, angle_rad)
+                
+        elif args.render:
             # Convertir angle de degrés en radians si fourni
             angle_rad = np.radians(args.angle) if args.angle is not None else None
             

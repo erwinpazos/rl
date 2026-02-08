@@ -224,6 +224,11 @@ class CorridorEnv(gym.Env):
                     self.progress_multiplier = rewards_config.get('progress_multiplier', 2.0)
                     self.collision_penalty = rewards_config.get('collision_penalty', -0.01)
                     self.fell_threshold = rewards_config.get('fell_threshold', 0.15)
+                    
+                    # Charger paramètres de terminaison par manque de progrès
+                    self.no_progress_check_interval = rewards_config.get('no_progress_check_interval', 200)
+                    self.no_progress_min_distance = rewards_config.get('no_progress_min_distance', 0.5)
+                    self.no_progress_penalty = rewards_config.get('no_progress_penalty', -4.0)
                 else:
                     # Valeurs par défaut
                     self.success_reward = 100.0
@@ -231,6 +236,9 @@ class CorridorEnv(gym.Env):
                     self.progress_multiplier = 2.0
                     self.collision_penalty = -0.01
                     self.fell_threshold = 0.15
+                    self.no_progress_check_interval = 200
+                    self.no_progress_min_distance = 0.5
+                    self.no_progress_penalty = -4.0
                     
             except Exception as e:
                 print(f"WARNING: Error loading config: {e}")
@@ -246,6 +254,9 @@ class CorridorEnv(gym.Env):
                 self.progress_multiplier = 2.0
                 self.collision_penalty = -0.01
                 self.fell_threshold = 0.15
+                self.no_progress_check_interval = 200
+                self.no_progress_min_distance = 0.5
+                self.no_progress_penalty = -4.0
         else:
             # Valeurs par défaut si pas de config
             self.max_steering_angle = 30.0
@@ -425,6 +436,9 @@ class CorridorEnv(gym.Env):
         else:
             # Réutiliser le corridor existant, juste reset les données
             mujoco.mj_resetData(self.model, self.data)
+            # IMPORTANT: Initialiser le seed à -1 si on ne régénère pas
+            if not hasattr(self, 'last_corridor_seed'):
+                self.last_corridor_seed = -1
         
         # SPAWN aléatoire normal
         spawn_x = 0.75  # Position sûre sur floor_flat_70 à 77
@@ -447,6 +461,11 @@ class CorridorEnv(gym.Env):
         
         self.step_count = 0
         self.prev_x = self.data.qpos[0]
+        self.success_reached = False  # Reset du flag de succès
+        
+        # Tracking pour terminaison par manque de progrès
+        self.last_progress_check_x = self.data.qpos[0]
+        self.last_progress_check_step = 0
         
         # Reset historique des positions
         self.position_history = []
@@ -490,9 +509,37 @@ class CorridorEnv(gym.Env):
         if self.step_count % self.history_interval == 0:
             self._update_position_history()
         
+        # Vérifier le progrès tous les N steps
+        if hasattr(self, 'no_progress_check_interval') and self.step_count > 0:
+            steps_since_check = self.step_count - self.last_progress_check_step
+            if steps_since_check >= self.no_progress_check_interval:
+                current_x = self.data.qpos[0]
+                progress = current_x - self.last_progress_check_x
+                
+                if progress < self.no_progress_min_distance:
+                    # Pas assez de progrès, terminer l'épisode
+                    reward = self.no_progress_penalty
+                    terminated = True
+                    info = {
+                        'reason': 'no_progress',
+                        'progress': progress,
+                        'required': self.no_progress_min_distance
+                    }
+                    info.update(self._get_info())
+                    return self._get_obs(), reward, terminated, False, info
+                
+                # Mettre à jour pour le prochain check
+                self.last_progress_check_x = current_x
+                self.last_progress_check_step = self.step_count
+        
         # Récompense et terminaison
         reward, terminated, info = self._compute_reward()
-        truncated = self.step_count >= self.max_steps
+        
+        # Vérifier si c'est un succès pour truncate l'épisode
+        if info.get('reason') == 'success':
+            truncated = True  # Succès = truncated (pas terminated car pas un échec)
+        else:
+            truncated = self.step_count >= self.max_steps
         
         info.update(self._get_info())
         return self._get_obs(), reward, terminated, truncated, info
@@ -659,8 +706,10 @@ class CorridorEnv(gym.Env):
                 world_col = int((world_y + self.corridor_width/2) / self.cell_size)
                 
                 # Vérifier si en dehors du couloir
-                if world_y < -self.corridor_width/2 or world_y > self.corridor_width/2:
-                    # En dehors du couloir sur les CÔTÉS = bump à l'infini (obstacle)
+                # Le couloir navigable va de -width/2 à +width/2
+                # Tout ce qui est en dehors = obstacle (murs latéraux)
+                if world_y <= -self.corridor_width/2 or world_y >= self.corridor_width/2:
+                    # En dehors du couloir sur les CÔTÉS = obstacle (mur)
                     grid[i, j, 0] = 1.0  # Obstacle (mur latéral)
                     grid[i, j, 1] = 0.0  # Pas de trou
                 elif world_x < 0 or world_x > self.corridor_length:
@@ -669,19 +718,25 @@ class CorridorEnv(gym.Env):
                     grid[i, j, 1] = 1.0  # Trou (extérieur avant/arrière)
                 else:
                     # Dans le couloir : chercher dans la carte des cellules
-                    cell_type = self.cell_map.get((world_row, world_col), 2)  # Défaut trou
-                    
-                    # Remplir les 2 canaux binaires
-                    if cell_type == 0:  # Sol
-                        grid[i, j, 0] = 0.0  # Pas d'obstacle
-                        grid[i, j, 1] = 0.0  # Pas de trou
-                        # Sol = les deux canaux à 0.0
-                    elif cell_type == 1:  # Bump
-                        grid[i, j, 0] = 1.0  # Obstacle (bump)
-                        grid[i, j, 1] = 0.0  # Pas de trou
-                    else:  # cell_type == 2, Trou
-                        grid[i, j, 0] = 0.0  # Pas d'obstacle
-                        grid[i, j, 1] = 1.0  # Trou
+                    # Vérifier que les indices sont valides
+                    if world_row < 0 or world_col < 0:
+                        # Hors limites négatives = trou
+                        grid[i, j, 0] = 0.0
+                        grid[i, j, 1] = 1.0
+                    else:
+                        cell_type = self.cell_map.get((world_row, world_col), 2)  # Défaut trou
+                        
+                        # Remplir les 2 canaux binaires
+                        if cell_type == 0:  # Sol
+                            grid[i, j, 0] = 0.0  # Pas d'obstacle
+                            grid[i, j, 1] = 0.0  # Pas de trou
+                            # Sol = les deux canaux à 0.0
+                        elif cell_type == 1:  # Bump
+                            grid[i, j, 0] = 1.0  # Obstacle (bump)
+                            grid[i, j, 1] = 0.0  # Pas de trou
+                        else:  # cell_type == 2, Trou
+                            grid[i, j, 0] = 0.0  # Pas d'obstacle
+                            grid[i, j, 1] = 1.0  # Trou
         
         return grid
         
@@ -695,11 +750,6 @@ class CorridorEnv(gym.Env):
         
         terminated = False
         info = {}
-        
-        # Succès: atteindre la distance de succès configurée (PAS DE TERMINAISON)
-        # if x >= self.success_distance:
-        #     info['reason'] = 'success'
-        #     return self.success_reward, True, info
         
         # Échec: tombé dans un trou
         if z < self.fell_threshold:
@@ -726,7 +776,19 @@ class CorridorEnv(gym.Env):
         progress_reward = delta_x * self.progress_multiplier
         reward = progress_reward + collision_penalty_value
         
-        info['reason'] = None
+        # Succès: atteindre la distance de succès (termine l'épisode en truncated)
+        if x >= self.success_distance:
+            if not hasattr(self, 'success_reached') or not self.success_reached:
+                self.success_reached = True
+                info['reason'] = 'success'
+                reward += self.success_reward
+                # Terminer l'épisode en truncated (succès, pas un échec)
+                # On retourne directement pour que step() gère le truncated
+                return reward, False, info  # terminated=False, truncated sera géré dans step()
+        
+        if info.get('reason') is None:
+            info['reason'] = None
+        
         return reward, terminated, info
     
     def _is_colliding_with_bump(self):
@@ -757,13 +819,15 @@ class CorridorEnv(gym.Env):
     
     def _get_info(self):
         corridor_type = getattr(self, 'current_corridor_type', f"{self.obstacle_type}-unknown")
+        corridor_seed = getattr(self, 'last_corridor_seed', -1)
         return {
             'x': float(self.data.qpos[0]),
             'y': float(self.data.qpos[1]),
             'z': float(self.data.qpos[2]),
             'step': self.step_count,
             'corridor_type': corridor_type.split('-')[0],  # "holes", "bumps", "both"
-            'is_random': 'random' in corridor_type
+            'is_random': 'random' in corridor_type,
+            'corridor_seed': corridor_seed
         }
     
     def _build_cell_map(self):
@@ -795,13 +859,16 @@ class CorridorEnv(gym.Env):
             length = self.corridor_length  # UTILISER LA CONFIG
             width = self.corridor_width    # UTILISER LA CONFIG
         else:
-            # Seed aléatoire
-            seed = np.random.randint(0, 10000)
+            # Seed aléatoire - utiliser le générateur indépendant de l'environnement
+            seed = self.env_random.randint(0, 10000)
             # Varier autour de la longueur configurée (±10%)
-            length = np.random.uniform(self.corridor_length * 0.9, self.corridor_length * 1.1)
-            width = np.random.uniform(self.corridor_width * 0.85, self.corridor_width * 1.15)
+            length = self.corridor_length * (0.9 + self.env_random.random() * 0.2)
+            width = self.corridor_width  # Largeur fixe pour cohérence avec les obstacles
             
             self.current_corridor_type = f"holes+{int(bump_ratio*100)}%bumps-random"
+        
+        # Stocker le seed pour logging (dans tous les cas)
+        self.last_corridor_seed = seed
         
         # Générer XML en mémoire (pas de sauvegarde fichier)
         corridor_xml_str = self.corridor_generator.generate_corridor_xml(
@@ -986,6 +1053,8 @@ class CorridorEnv(gym.Env):
             name_lower = name.lower()
             if 'bump' in name_lower:
                 cell_type = 1  # Bump
+            elif 'wall' in name_lower:
+                cell_type = 1  # Mur = obstacle (comme bump)
             elif 'flat' in name_lower or 'floor' in name_lower or 'cell' in name_lower:
                 cell_type = 0  # Sol
             else:

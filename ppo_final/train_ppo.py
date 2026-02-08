@@ -350,7 +350,8 @@ class Agent(nn.Module):
         
         # Calculer dimensions dynamiquement depuis l'observation
         # Créer un environnement temporaire pour obtenir les dimensions exactes
-        temp_env = CorridorEnv()
+        # Utiliser corridor_xml=None pour forcer la génération aléatoire (pas de dépendance fichier)
+        temp_env = CorridorEnv(corridor_xml=None)
         self.history_dim = temp_env.history_dim
         self.grid_dim = temp_env.grid_dim
         self.grid_rows = temp_env.grid_rows
@@ -499,97 +500,78 @@ def make_env(config=None, random_percentage=None, curriculum_max_steps=None, bum
 
 
 def get_curriculum_state(config, batch_metrics):
-    """Obtenir l'état actuel du curriculum basé sur la distance moyenne des 2 derniers batches."""
+    """Obtenir l'état actuel du curriculum basé sur la distance du dernier batch."""
     if not config or 'curriculum' not in config:
-        return None, None, None, 1
+        return None, None, None, 1, 0.0, False
     
     curriculum_config = config['curriculum']
     if not curriculum_config.get('enabled', False):
-        return None, None, None, 1
+        return None, None, None, 1, 0.0, False
     
-    # Calculer la distance moyenne des 2 derniers batches
-    if len(batch_metrics) < 2:
-        avg_distance = 0.0
+    # Calculer la distance du dernier batch (= distance globale)
+    if len(batch_metrics) < 1:
+        current_distance = 0.0
     else:
-        recent_distances = [batch['mean_distance'] for batch in batch_metrics[-2:]]
+        last_distance = batch_metrics[-1]['mean_distance']
         
         # Filtrer les valeurs NaN ou invalides
-        valid_distances = [d for d in recent_distances if d == d and d is not None and d >= -10]  # d == d détecte NaN
-        if len(valid_distances) == 0:
-            avg_distance = 0.0
-            print(f"WARNING: All recent distances are invalid, using 0.0m for curriculum")
+        if last_distance != last_distance or last_distance is None or last_distance < -10:
+            current_distance = 0.0
+            print(f"WARNING: Last batch distance is invalid ({last_distance}), using 0.0m for curriculum")
         else:
-            avg_distance = sum(valid_distances) / len(valid_distances)
+            current_distance = last_distance
             
         # Debug seulement si problème
-        if avg_distance == 0.0 and len(batch_metrics) >= 2:
-            print(f"DEBUG: avg_distance=0! recent_distances={recent_distances}, valid_distances={valid_distances}")
-            print(f"DEBUG: Last 2 batches: batch_nums=[{batch_metrics[-2]['batch_num']}, {batch_metrics[-1]['batch_num']}]")
+        if current_distance == 0.0 and len(batch_metrics) >= 1:
+            print(f"DEBUG: current_distance=0! last_distance={last_distance}")
+            print(f"DEBUG: Last batch: batch_num={batch_metrics[-1]['batch_num']}")
     
-    # Déterminer la phase actuelle et la distance locale
+    # Déterminer la phase actuelle
     phase_distance_history = getattr(get_curriculum_state, 'phase_distance_history', [])
     current_phase = len(phase_distance_history) + 1
-    if current_phase > 3:
-        current_phase = 3
+    
+    # Obtenir le nombre max de phases depuis le config
+    bump_ratio_schedule = curriculum_config.get('bump_ratio_schedule', [])
+    max_phase = len(bump_ratio_schedule) if bump_ratio_schedule else 3
+    
+    if current_phase > max_phase:
+        current_phase = max_phase
     
     # Obtenir le seuil de distance pour passer à la phase suivante depuis le config
-    bump_ratio_schedule = curriculum_config.get('bump_ratio_schedule', [])
-    phase_threshold = 100  # Valeur par défaut
+    phase_threshold = None
     for phase_config in bump_ratio_schedule:
         if phase_config['phase'] == current_phase:
-            phase_threshold = phase_config.get('distance_threshold', 100)
+            phase_threshold = phase_config.get('distance_threshold', None)
             break
-    
-    # Calculer la distance "locale" pour la phase actuelle
-    if current_phase == 1:
-        # Phase 1: utiliser la distance globale
-        local_distance = avg_distance
-    else:
-        # Phase 2 ou 3: calculer la distance depuis le début de la phase
-        if len(phase_distance_history) >= current_phase - 1:
-            # Distance depuis la transition vers cette phase
-            phase_start_distance = phase_distance_history[current_phase - 2] if current_phase > 1 else 0
-            local_distance = max(0, avg_distance - phase_start_distance)
-        else:
-            local_distance = avg_distance
     
     # Vérifier si on doit passer à la phase suivante
     phase_changed = False
-    if current_phase < 3 and phase_threshold is not None and local_distance >= phase_threshold:
+    if current_phase < max_phase and phase_threshold is not None and current_distance >= phase_threshold:
         # Vérifier si on n'a pas déjà fait la transition pour cette phase
         if not hasattr(get_curriculum_state, 'phase_transition_done'):
             get_curriculum_state.phase_transition_done = set()
         
         # Calculer la nouvelle phase
         new_phase = len(phase_distance_history) + 2  # +2 car on va ajouter à l'historique
-        if new_phase > 3:
-            new_phase = 3
+        if new_phase > max_phase:
+            new_phase = max_phase
         
         # Vérifier si cette transition n'a pas déjà été faite
         if new_phase not in get_curriculum_state.phase_transition_done:
             # Transition vers la phase suivante
-            phase_distance_history.append(avg_distance)
+            phase_distance_history.append(current_distance)
             current_phase = len(phase_distance_history) + 1
-            if current_phase > 3:
-                current_phase = 3
-            local_distance = 0.0  # Reset de la distance locale pour la nouvelle phase
+            if current_phase > max_phase:
+                current_phase = max_phase
             phase_changed = True
             get_curriculum_state.phase_transition_done.add(current_phase)  # Marquer cette phase comme traitée
-            print(f"CURRICULUM: Phase transition! Moving to phase {current_phase} (local_distance: {local_distance:.1f}m ≥ {phase_threshold}m)")
+            print(f"\n{'!'*70}")
+            print(f"PHASE TRANSITION: Phase {current_phase-1} → Phase {current_phase}")
+            print(f"  Trigger: Distance {current_distance:.1f}m ≥ threshold {phase_threshold}m")
+            print(f"{'!'*70}\n")
     
-    # Sauvegarder l'historique et tracker la distance max
+    # Sauvegarder l'historique
     get_curriculum_state.phase_distance_history = phase_distance_history
-    
-    # NOUVEAU: Tracker la distance maximale globale atteinte (irréversible)
-    if not hasattr(get_curriculum_state, 'max_distance_achieved'):
-        get_curriculum_state.max_distance_achieved = 0.0
-    
-    # Mettre à jour la distance max si on progresse
-    if avg_distance > get_curriculum_state.max_distance_achieved:
-        get_curriculum_state.max_distance_achieved = avg_distance
-        print(f"CURRICULUM: New max distance achieved: {avg_distance:.1f}m")
-    
-    max_distance_achieved = get_curriculum_state.max_distance_achieved
     
     # Obtenir le ratio de bumps pour la phase actuelle
     current_bump_ratio = 0.0  # Défaut
@@ -598,25 +580,30 @@ def get_curriculum_state(config, batch_metrics):
             current_bump_ratio = phase_config['bump_ratio']
             break
     
-    # Pour chaque phase, calculer la distance "locale" (reset à 0 à chaque phase)
-    # Obtenir les paramètres basés sur la distance locale (reset à chaque phase)
+    # NOUVEAU: Tracker la distance maximale atteinte (irréversible)
+    if not hasattr(get_curriculum_state, 'max_distance_achieved'):
+        get_curriculum_state.max_distance_achieved = 0.0
+    
+    # Reset du palier max si changement de phase
+    if phase_changed:
+        # Nouvelle phase = reset du palier max
+        get_curriculum_state.max_distance_achieved = 0.0
+        print(f"  → Distance tracker reset for new phase {current_phase}")
+    
+    # Mettre à jour le palier max (ne peut qu'augmenter)
+    if current_distance > get_curriculum_state.max_distance_achieved:
+        get_curriculum_state.max_distance_achieved = current_distance
+    
+    # Obtenir les paramètres basés sur la distance avec paliers irréversibles
     random_percentage = get_curriculum_value_by_distance(
         curriculum_config.get('random_corridor_schedule', []), 
-        local_distance, 
+        current_distance, 
         'random_percentage', 
         0.2,
-        None  # Pas de palier irréversible, on reset à chaque phase
+        get_curriculum_state.max_distance_achieved  # Palier irréversible
     )
     
-    max_steps = get_curriculum_value_by_distance(
-        curriculum_config.get('max_steps_schedule', []), 
-        local_distance, 
-        'max_steps', 
-        3000,
-        None  # Pas de palier irréversible, on reset à chaque phase
-    )
-    
-    return random_percentage, current_bump_ratio, max_steps, current_phase, local_distance, phase_changed
+    return random_percentage, current_bump_ratio, current_phase, current_distance, phase_changed
 
 
 def get_curriculum_value_by_distance(schedule, distance, value_key, default_value, current_max_achieved=None):
@@ -654,7 +641,7 @@ def get_curriculum_random_percentage(config, iteration, batch_metrics=None):
     """Obtenir le pourcentage de corridors aléatoires selon le curriculum (compatibilité)."""
     if batch_metrics is None:
         return None
-    random_percentage, _, _, _, _, _ = get_curriculum_state(config, batch_metrics)
+    random_percentage, _, _, _, _ = get_curriculum_state(config, batch_metrics)
     return random_percentage
 
 
@@ -662,78 +649,111 @@ def get_curriculum_bump_ratio(config, iteration, batch_metrics=None):
     """Obtenir le ratio de bumps selon le curriculum."""
     if batch_metrics is None:
         return None
-    _, bump_ratio, _, _, _, _ = get_curriculum_state(config, batch_metrics)
+    _, bump_ratio, _, _, _ = get_curriculum_state(config, batch_metrics)
     return bump_ratio
 
 
 def get_curriculum_max_steps(config, iteration, batch_metrics=None):
-    """Obtenir le nombre de steps max selon le curriculum (compatibilité)."""
-    if batch_metrics is None:
-        return None
-    _, _, max_steps, _, _, _ = get_curriculum_state(config, batch_metrics)
-    return max_steps
+    """Obtenir le nombre max de steps selon le curriculum - DEPRECATED, utiliser environment.max_steps."""
+    # Cette fonction n'est plus utilisée, max_steps est fixe dans environment
+    return None
 
 
 def update_curriculum(envs, debug_env, iteration, num_iterations, config=None, batch_metrics=None):
-    """Curriculum learning basé sur la distance moyenne des 2 derniers batches."""
+    """Curriculum learning basé sur la distance moyenne des 2 derniers batches.
+    
+    Note: batch_metrics doit contenir les métriques combinées (principales + temp).
+    """
     
     # Vérifier si les batch_metrics ont changé depuis la dernière fois
     current_batch_count = len(batch_metrics) if batch_metrics else 0
     last_batch_count = getattr(update_curriculum, 'last_batch_count', -1)
     
+    # Sauvegarder l'état précédent pour détecter les changements
+    prev_cached = getattr(update_curriculum, 'cached_curriculum_values', None)
+    
+    # Vérifier aussi le numéro du dernier batch pour être sûr
+    last_batch_num = batch_metrics[-1]['batch_num'] if batch_metrics else -1
+    prev_last_batch_num = getattr(update_curriculum, 'last_batch_num', -1)
+    
     # Ne mettre à jour le curriculum que si de nouveaux batches sont disponibles
-    if current_batch_count <= last_batch_count:
+    # Vérifier à la fois le count ET le numéro du dernier batch
+    if current_batch_count <= last_batch_count and last_batch_num <= prev_last_batch_num:
         # Pas de nouveaux batches, utiliser les dernières valeurs calculées
         cached_values = getattr(update_curriculum, 'cached_curriculum_values', (None, None, None, None, None, False))
-        random_percentage, bump_ratio, current_steps, current_phase, local_distance, phase_changed = cached_values
+        random_percentage, bump_ratio, current_steps, current_phase, current_distance, phase_changed = cached_values
         
         # Valeurs par défaut si pas de cache
         if current_steps is None:
             if config and 'environment' in config:
-                current_steps = config['environment'].get('max_steps', 4000)
+                current_steps = config['environment'].get('max_steps', 7000)
             else:
-                current_steps = 4000
+                current_steps = 7000
         
-        # Pas d'affichage si pas de changement
+        # AFFICHER L'ÉTAT ACTUEL même sans changement
+        # Note: on utilise les valeurs du cache car pas de nouveau batch
+        print(f"CURRICULUM STATE (Phase {current_phase}):")
+        print(f"  Distance: {current_distance:.1f}m")
+        print(f"  Random corridors: {random_percentage*100:.0f}% | Max steps: {current_steps} | Obstacles: holes + {int(bump_ratio*100)}% bumps")
+        print(f"  → No new batch since last check (batch #{last_batch_num})")
+        print(f"{'='*70}")
+        
         return current_steps, random_percentage, bump_ratio, phase_changed
     
     # Nouveaux batches disponibles, recalculer le curriculum
-    if iteration % 5 == 0:  # Afficher seulement toutes les 5 itérations pour réduire le spam
-        print(f"CURRICULUM: New batch detected ({current_batch_count} vs {last_batch_count}), updating curriculum...")
     update_curriculum.last_batch_count = current_batch_count
+    update_curriculum.last_batch_num = last_batch_num
     
     # Obtenir l'état du curriculum basé sur la distance
-    random_percentage, bump_ratio, current_steps, current_phase, local_distance, phase_changed = get_curriculum_state(config, batch_metrics or [])
+    random_percentage, bump_ratio, current_phase, current_distance, phase_changed = get_curriculum_state(config, batch_metrics or [])
     
-    # Sauvegarder les valeurs calculées
-    update_curriculum.cached_curriculum_values = (random_percentage, bump_ratio, current_steps, current_phase, local_distance, phase_changed)
+    # max_steps est maintenant fixe depuis environment config
+    if config and 'environment' in config:
+        current_steps = config['environment'].get('max_steps', 7000)
+    else:
+        current_steps = 7000
     
-    # Valeurs par défaut si pas de curriculum
-    if current_steps is None:
-        if config and 'environment' in config:
-            current_steps = config['environment'].get('max_steps', 4000)
-        else:
-            current_steps = 4000
+    # Sauvegarder les valeurs calculées (inclure current_distance dans le cache)
+    update_curriculum.cached_curriculum_values = (random_percentage, bump_ratio, current_steps, current_phase, current_distance, phase_changed)
     
     # Calculer la distance moyenne pour l'affichage
     avg_distance = 0.0
-    if batch_metrics and len(batch_metrics) >= 2:
-        recent_distances = [batch['mean_distance'] for batch in batch_metrics[-2:]]
+    if batch_metrics and len(batch_metrics) >= 1:
+        last_distance = batch_metrics[-1]['mean_distance']
         # Filtrer les valeurs NaN ou invalides
-        valid_distances = [d for d in recent_distances if d == d and d is not None and d >= -10]  # d == d détecte non-NaN
-        if len(valid_distances) > 0:
-            avg_distance = sum(valid_distances) / len(valid_distances)
+        if last_distance == last_distance and last_distance is not None and last_distance >= -10:  # last_distance == last_distance détecte non-NaN
+            avg_distance = last_distance
     
-    if random_percentage is not None or current_steps != 4000 or bump_ratio is not None:
-        # Afficher le curriculum actuel seulement si c'est un nouveau batch ou toutes les 10 itérations
-        if current_batch_count > last_batch_count or iteration % 10 == 0:
-            curriculum_info = f"CURRICULUM (Phase {current_phase}, local_dist: {local_distance:.1f}m, global_dist: {avg_distance:.1f}m):"
-            if random_percentage is not None:
-                curriculum_info += f" Random corridors: {random_percentage*100:.0f}%"
-            curriculum_info += f" Max steps: {current_steps}"
-            if bump_ratio is not None:
-                curriculum_info += f" Obstacles: holes + {int(bump_ratio*100)}% bumps"
-            print(curriculum_info)
+    # === LOGS AMÉLIORÉS ===
+    # Détecter les changements de paliers
+    prev_random = prev_cached[0] if prev_cached else None
+    prev_steps = prev_cached[2] if prev_cached else None
+    prev_phase = prev_cached[3] if prev_cached else None
+    
+    random_changed = prev_random is not None and random_percentage != prev_random
+    steps_changed = prev_steps is not None and current_steps != prev_steps
+    
+    # Afficher l'état actuel du curriculum
+    print(f"CURRICULUM STATE (Phase {current_phase}):")
+    print(f"  Distance: {current_distance:.1f}m")
+    print(f"  Random corridors: {random_percentage*100:.0f}% | Max steps: {current_steps} | Obstacles: holes + {int(bump_ratio*100)}% bumps")
+    
+    # Afficher les changements détectés
+    if phase_changed:
+        print(f"  ✓ PHASE CHANGE: Phase {prev_phase} → Phase {current_phase}")
+        print(f"    Reason: Distance {current_distance:.1f}m reached phase threshold")
+        print(f"    → Paliers reset (random & steps)")
+    elif random_changed or steps_changed:
+        print(f"  ✓ PALIER CHANGE:")
+        if random_changed:
+            print(f"    Random: {prev_random*100:.0f}% → {random_percentage*100:.0f}%")
+        if steps_changed:
+            print(f"    Max steps: {prev_steps} → {current_steps}")
+        print(f"    Reason: Distance {current_distance:.1f}m reached new threshold")
+    else:
+        print(f"  → No change (distance not sufficient for next threshold)")
+    
+    print(f"{'='*70}")
     
     # Update max_steps for all environments
     if hasattr(envs, 'envs'):
@@ -785,7 +805,7 @@ def update_curriculum(envs, debug_env, iteration, num_iterations, config=None, b
     return current_steps, random_percentage, bump_ratio, phase_changed
 
 
-def debug_render_episode(agent, debug_env, device, max_steps=None, current_bump_ratio=None):
+def debug_render_episode(agent, debug_env, device, max_steps=None, current_bump_ratio=None, show_vision=True):
     """Render un épisode de debug pour voir ce qui se passe."""
     print("\nDEBUG: Rendering episode visualization...")
     
@@ -807,6 +827,158 @@ def debug_render_episode(agent, debug_env, device, max_steps=None, current_bump_
     d = env_to_use.data
     robot_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_BODY, 'robot')
     
+    # Préparer la visualisation de la vision CNN si demandé
+    vision_queue = None
+    vision_window = None
+    
+    if show_vision:
+        import queue
+        import tkinter as tk
+        from PIL import Image, ImageTk
+        
+        vision_queue = queue.Queue(maxsize=2)
+        
+        class VisionWindow:
+            def __init__(self):
+                self.root = tk.Tk()
+                self.root.title('Vision CNN en temps réel')
+                self.root.geometry('1200x650')
+                
+                # Frame principal
+                main_frame = tk.Frame(self.root)
+                main_frame.pack(fill=tk.BOTH, expand=True)
+                
+                # Frame pour les 3 vues (en haut)
+                vision_frame = tk.Frame(main_frame)
+                vision_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=False)
+                
+                # 3 colonnes pour les 3 vues
+                self.frames = []
+                self.labels = []
+                self.titles = ['Canal 0 - Obstacles', 'Canal 1 - Trous', 'Vue Combinée']
+                
+                for i, title in enumerate(self.titles):
+                    frame = tk.Frame(vision_frame)
+                    frame.grid(row=0, column=i, padx=10, pady=10)
+                    
+                    title_label = tk.Label(frame, text=title, font=('Arial', 12, 'bold'))
+                    title_label.pack()
+                    
+                    img_label = tk.Label(frame)
+                    img_label.pack()
+                    
+                    self.frames.append(frame)
+                    self.labels.append(img_label)
+                
+                # Frame pour les logs (en bas)
+                log_frame = tk.Frame(main_frame)
+                log_frame.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True, padx=10, pady=10)
+                
+                log_title = tk.Label(log_frame, text='Episode Progress', font=('Arial', 12, 'bold'))
+                log_title.pack()
+                
+                # Zone de texte avec scrollbar
+                scrollbar = tk.Scrollbar(log_frame)
+                scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+                
+                self.log_text = tk.Text(log_frame, height=8, yscrollcommand=scrollbar.set, 
+                                       font=('Courier', 9), bg='black', fg='lime')
+                self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+                scrollbar.config(command=self.log_text.yview)
+                
+                # Timer pour checker la queue
+                self.check_queue()
+            
+            def add_log(self, message):
+                """Ajoute un message au log."""
+                self.log_text.insert(tk.END, message + '\n')
+                self.log_text.see(tk.END)  # Auto-scroll vers le bas
+            
+            def check_queue(self):
+                try:
+                    data = vision_queue.get_nowait()
+                    if data is None:
+                        self.root.quit()
+                        return
+                    
+                    # Distinguer entre vision data et log message
+                    if isinstance(data, str):
+                        # C'est un message de log
+                        self.add_log(data)
+                    else:
+                        # C'est des données de vision
+                        grid, env_data = data
+                        self.display_grid(grid, env_data)
+                except queue.Empty:
+                    pass
+                finally:
+                    self.root.after(50, self.check_queue)  # Check toutes les 50ms
+            
+            def display_grid(self, grid, env_data):
+                rows, cols = grid.shape[0], grid.shape[1]
+                robot_row = env_data.robot_row_in_grid
+                robot_col = env_data.robot_col_in_grid
+                
+                # Canal 0 - Obstacles (rouge)
+                img0 = self.grid_to_image(grid[:, :, 0], robot_row, robot_col, (255, 0, 0))
+                photo0 = ImageTk.PhotoImage(img0.resize((380, 380), Image.NEAREST))
+                self.labels[0].config(image=photo0)
+                self.labels[0].image = photo0  # Garder référence
+                
+                # Canal 1 - Trous (bleu)
+                img1 = self.grid_to_image(grid[:, :, 1], robot_row, robot_col, (0, 0, 255))
+                photo1 = ImageTk.PhotoImage(img1.resize((380, 380), Image.NEAREST))
+                self.labels[1].config(image=photo1)
+                self.labels[1].image = photo1
+                
+                # Vue combinée
+                img2 = self.grid_combined_to_image(grid, robot_row, robot_col)
+                photo2 = ImageTk.PhotoImage(img2.resize((380, 380), Image.NEAREST))
+                self.labels[2].config(image=photo2)
+                self.labels[2].image = photo2
+            
+            def grid_to_image(self, channel, robot_row, robot_col, color):
+                rows, cols = channel.shape
+                img_data = np.zeros((rows, cols, 3), dtype=np.uint8)
+                
+                # Obstacles en couleur
+                mask = channel > 0.5
+                img_data[mask] = color
+                img_data[~mask] = [255, 255, 255]
+                
+                # Robot en vert
+                if 0 <= robot_row < rows and 0 <= robot_col < cols:
+                    img_data[robot_row, robot_col] = [0, 255, 0]
+                
+                return Image.fromarray(img_data, 'RGB')
+            
+            def grid_combined_to_image(self, grid, robot_row, robot_col):
+                rows, cols = grid.shape[0], grid.shape[1]
+                img_data = np.ones((rows, cols, 3), dtype=np.uint8) * 255
+                
+                for i in range(rows):
+                    for j in range(cols):
+                        obstacle = grid[i, j, 0]
+                        hole = grid[i, j, 1]
+                        
+                        if obstacle > 0.5 and hole > 0.5:
+                            img_data[i, j] = [128, 0, 128]  # Purple
+                        elif obstacle > 0.5:
+                            img_data[i, j] = [255, 0, 0]  # Rouge
+                        elif hole > 0.5:
+                            img_data[i, j] = [0, 0, 255]  # Bleu
+                
+                # Robot en vert
+                if 0 <= robot_row < rows and 0 <= robot_col < cols:
+                    img_data[robot_row, robot_col] = [0, 255, 0]
+                
+                return Image.fromarray(img_data, 'RGB')
+            
+            def update(self):
+                self.root.update()
+        
+        vision_window = VisionWindow()
+    
     try:
         with viewer.launch_passive(m, d) as v:
             v.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
@@ -823,8 +995,16 @@ def debug_render_episode(agent, debug_env, device, max_steps=None, current_bump_
             if max_steps is None:
                 max_steps = env_to_use.max_steps
             
-            print(f"Position initiale: x={env_to_use.data.qpos[0]:.2f}, y={env_to_use.data.qpos[1]:.2f}")
-            print(f"Max steps pour cet épisode: {max_steps}")
+            # Log initial dans la fenêtre
+            if show_vision and vision_queue:
+                try:
+                    vision_queue.put_nowait(f"Position initiale: x={env_to_use.data.qpos[0]:.2f}, y={env_to_use.data.qpos[1]:.2f}")
+                    vision_queue.put_nowait(f"Max steps: {max_steps}")
+                except queue.Full:
+                    pass
+            else:
+                print(f"Position initiale: x={env_to_use.data.qpos[0]:.2f}, y={env_to_use.data.qpos[1]:.2f}")
+                print(f"Max steps pour cet épisode: {max_steps}")
             
             while not done and v.is_running() and step < max_steps:
                 # Action de l'agent
@@ -838,44 +1018,33 @@ def debug_render_episode(agent, debug_env, device, max_steps=None, current_bump_
                 ep_return += reward
                 step += 1
                 
-                # Afficher info + vision
+                # Mettre à jour la vision CNN
+                if show_vision and vision_queue and step % 5 == 0:
+                    try:
+                        grid = obs[7+env_to_use.history_dim:].reshape(env_to_use.grid_rows, env_to_use.grid_cols, 2)
+                        try:
+                            vision_queue.put_nowait((grid, env_to_use))
+                        except queue.Full:
+                            pass
+                        # Update tkinter
+                        vision_window.update()
+                    except Exception as e:
+                        print(f"Warning: Vision error: {e}")
+                
+                # Afficher info
                 if step % 25 == 0:
                     x = env_to_use.data.qpos[0]
                     stabilizing = " (STABILISATION)" if step < env_to_use.stabilization_steps else ""
-                    print(f"Step {step}: x={x:.2f}m, reward={reward:.3f}, return={ep_return:.1f}{stabilizing}")
+                    log_msg = f"Step {step}: x={x:.2f}m, reward={reward:.3f}, return={ep_return:.1f}{stabilizing}"
                     
-                    # Décoder l'observation SIMPLIFIÉE AVEC HISTORIQUE RÉDUIT
-                    robot_state = obs[:7]  # pos(3) + vel(3) + angle(1)
-                    # history_simplified = obs[7:7+env_to_use.history_dim].reshape(env_to_use.history_length, 6)  # frames × 6 valeurs
-                    # grid = obs[7+env_to_use.history_dim:].reshape(env_to_use.grid_rows, env_to_use.grid_cols, 2)  # Grille dynamique×2
-                    
-                    print(f"  Robot: pos=({robot_state[0]:.2f}, {robot_state[1]:.2f}, {robot_state[2]:.2f}), vel=({robot_state[3]:.2f}, {robot_state[4]:.2f}, {robot_state[5]:.2f}), angle={robot_state[6]:.2f}rad ({np.degrees(robot_state[6]):.1f}°)")
-                    
-                    # # Afficher historique simplifié (dernière frame)
-                    # last_frame = history_simplified[-1]  # 6 valeurs: pos(3) + vel(3)
-                    # last_pos = last_frame[:3]
-                    # last_vel = last_frame[3:]
-                    # print(f"  Historique (4 frames): dernière pos=({last_pos[0]:+.2f}, {last_pos[1]:+.2f}, {last_pos[2]:+.2f}), vel=({last_vel[0]:+.2f}, {last_vel[1]:+.2f}, {last_vel[2]:+.2f})")
-                    
-                    # # Afficher grille (20 lignes × TOUTE la largeur 30 colonnes) - Canal 0 (obstacles)
-                    # obstacles_grid = grid[:, :, 0]  # Canal obstacles
-                    # trous_grid = grid[:, :, 1]      # Canal trous
-                    
-                    # print(f"  GRILLE (lignes 0-{env_to_use.grid_rows-1}, EGO-CENTRIQUE - tourne avec robot):")
-                    # for i in range(min(env_to_use.grid_rows, 20)):  # Limiter l'affichage à 20 lignes max
-                    #     line = "    "
-                    #     for j in range(min(env_to_use.grid_cols, 40)):  # Limiter l'affichage à 40 colonnes max
-                    #         if obstacles_grid[i, j] > 0.5:
-                    #             line += '#'  # Obstacle (bump)
-                    #         elif trous_grid[i, j] > 0.5:
-                    #             line += '.'  # Trou
-                    #         else:
-                    #             line += '/'  # Sol
-                    #     relative_dist = (i - env_to_use.robot_row_in_grid) * env_to_use.cell_size  # Distance relative au robot
-                    #     print(f"    {relative_dist:+.1f}m: {line}")
-                    # print("    (/=floor, #=obstacle/bump, .=hole)")
-                    # print("    (EGO-CENTRIC grid: rotates with robot, 'forward' = always up)")
-                    # print(f"    (Vision: {env_to_use.vision_length}m x {env_to_use.vision_width}m, {env_to_use.cell_size}m cells)")
+                    # Envoyer à la fenêtre ou au terminal
+                    if show_vision and vision_queue:
+                        try:
+                            vision_queue.put_nowait(log_msg)
+                        except queue.Full:
+                            pass
+                    else:
+                        print(log_msg)
                 
                 v.sync()
                 time.sleep(0.05)  # 20 FPS
@@ -885,7 +1054,18 @@ def debug_render_episode(agent, debug_env, device, max_steps=None, current_bump_
             corridor_type = info.get('corridor_type', 'unknown')
             is_random = info.get('is_random', False)
             random_str = "random" if is_random else "fixed"
-            print(f"Episode ended: {reason:<9} | Steps: {step:>4} | Distance: {final_x:>5.2f}m | Reward: {ep_return:>5.1f} | Corridor: {corridor_type}-{random_str}")
+            final_msg = f"Episode ended: {reason:<9} | Steps: {step:>4} | Distance: {final_x:>5.2f}m | Reward: {ep_return:>5.1f} | Corridor: {corridor_type}-{random_str}"
+            
+            # Envoyer à la fenêtre ou au terminal
+            if show_vision and vision_queue:
+                try:
+                    vision_queue.put_nowait("="*60)
+                    vision_queue.put_nowait(final_msg)
+                    vision_queue.put_nowait("="*60)
+                except queue.Full:
+                    pass
+            else:
+                print(final_msg)
             
             # Attendre un peu pour voir le résultat
             time.sleep(2.0)
@@ -893,6 +1073,65 @@ def debug_render_episode(agent, debug_env, device, max_steps=None, current_bump_
     except Exception as e:
         print(f"Erreur render: {e}")
         print("Continuons sans render...")
+    finally:
+        # Fermer la fenêtre tkinter
+        if vision_queue is not None:
+            try:
+                vision_queue.put_nowait(None)
+            except:
+                pass
+        if vision_window is not None:
+            try:
+                vision_window.root.destroy()
+            except:
+                pass
+
+
+def update_vision_display(axes, grid, env):
+    """Met à jour l'affichage de la vision CNN."""
+    robot_row = env.robot_row_in_grid
+    robot_col = env.robot_col_in_grid
+    
+    # Canal 0 - Obstacles
+    axes[0].clear()
+    axes[0].imshow(grid[:, :, 0], cmap='Greys_r', interpolation='nearest', vmin=0, vmax=1)
+    axes[0].plot(robot_col, robot_row, 'go', markersize=8, markeredgecolor='darkgreen', markeredgewidth=2)
+    axes[0].arrow(robot_col, robot_row, 0, 3, head_width=1.5, head_length=1, fc='yellow', ec='orange', linewidth=2)
+    axes[0].set_title('Canal 0 - Obstacles')
+    axes[0].grid(True, alpha=0.3)
+    
+    # Canal 1 - Trous
+    axes[1].clear()
+    axes[1].imshow(grid[:, :, 1], cmap='Greys_r', interpolation='nearest', vmin=0, vmax=1)
+    axes[1].plot(robot_col, robot_row, 'go', markersize=8, markeredgecolor='darkgreen', markeredgewidth=2)
+    axes[1].arrow(robot_col, robot_row, 0, 3, head_width=1.5, head_length=1, fc='yellow', ec='orange', linewidth=2)
+    axes[1].set_title('Canal 1 - Trous')
+    axes[1].grid(True, alpha=0.3)
+    
+    # Vue combinée
+    axes[2].clear()
+    rows, cols = grid.shape[0], grid.shape[1]
+    img = np.ones((rows, cols, 3))
+    
+    for i in range(rows):
+        for j in range(cols):
+            obstacle = grid[i, j, 0]
+            hole = grid[i, j, 1]
+            
+            if obstacle > 0.5 and hole > 0.5:
+                img[i, j] = [0.5, 0, 0.5]  # Purple
+            elif obstacle > 0.5:
+                img[i, j] = [1, 0, 0]  # Rouge
+            elif hole > 0.5:
+                img[i, j] = [0, 0, 1]  # Bleu
+            else:
+                img[i, j] = [1, 1, 1]  # Blanc
+    
+    axes[2].imshow(img, interpolation='nearest')
+    axes[2].plot(robot_col, robot_row, 'go', markersize=8, markeredgecolor='darkgreen', markeredgewidth=2)
+    axes[2].arrow(robot_col, robot_row, 0, 3, head_width=1.5, head_length=1, fc='yellow', ec='orange', linewidth=2)
+    axes[2].set_title('Vue Combinée')
+    axes[2].grid(True, alpha=0.3)
 
 
 def train(config_path="config.yaml", **kwargs):
@@ -994,13 +1233,22 @@ def train(config_path="config.yaml", **kwargs):
     print(f"GAE Lambda: {gae_lambda}")
     print("=" * 70 + "\n")
     
+    # Ouvrir fichier de log des épisodes
+    episodes_log_file = open("episodes_log.txt", "a")
+    episodes_log_file.write(f"\n{'='*70}\n")
+    episodes_log_file.write(f"TRAINING SESSION - {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    episodes_log_file.write(f"{'='*70}\n")
+    episodes_log_file.flush()
+    
     # Curriculum initial (distance 0)
-    initial_random_percentage, initial_bump_ratio, initial_max_steps, initial_phase, _, _ = get_curriculum_state(config, [])
+    initial_random_percentage, initial_bump_ratio, initial_phase, _, _ = get_curriculum_state(config, [])
+    
+    # max_steps vient de environment config (fixe)
+    initial_max_steps = params.get('max_steps', 7000)
     
     if initial_random_percentage is not None:
         print(f"CURRICULUM: Starting with {initial_random_percentage*100:.0f}% random corridors")
-    if initial_max_steps is not None:
-        print(f"CURRICULUM: Starting with {initial_max_steps} max steps per episode")
+    print(f"CURRICULUM: Max steps per episode: {initial_max_steps}")
     if initial_bump_ratio is not None:
         print(f"CURRICULUM: Starting with holes + {int(initial_bump_ratio*100)}% bumps")
     
@@ -1066,9 +1314,46 @@ def train(config_path="config.yaml", **kwargs):
             # Nouveau format avec métadonnées
             if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
                 agent.load_state_dict(checkpoint['model_state_dict'])
+                
+                # Restaurer l'état de l'optimiseur si disponible
+                if 'optimizer_state_dict' in checkpoint:
+                    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                    print(f"   OK: Optimizer state restored!")
+                else:
+                    print(f"   WARNING: No optimizer state found (old checkpoint format)")
+                
                 saved_iteration = checkpoint.get('iteration', (latest_step // batch_size) + 1)
                 saved_global_step = checkpoint.get('global_step', latest_step)
                 saved_total_episodes = checkpoint.get('total_episodes', 0)
+                
+                # Restaurer l'état du curriculum si disponible
+                if 'curriculum_state' in checkpoint and checkpoint['curriculum_state'] is not None:
+                    curr_state = checkpoint['curriculum_state']
+                    print(f"\nRESTORING CURRICULUM STATE:")
+                    print(f"  Phase: {curr_state.get('current_phase', 1)}")
+                    print(f"  Distance: {curr_state.get('current_distance', 0):.1f}m")
+                    print(f"  Random: {curr_state.get('random_percentage', 0.2)*100:.0f}%")
+                    print(f"  Max steps: {curr_state.get('max_steps', 3000)}")
+                    print(f"  Bump ratio: {curr_state.get('bump_ratio', 0)*100:.0f}%")
+                    
+                    # Restaurer les attributs de get_curriculum_state
+                    if 'phase_distance_history' in curr_state:
+                        get_curriculum_state.phase_distance_history = curr_state['phase_distance_history']
+                    if 'max_distance_achieved' in curr_state:
+                        get_curriculum_state.max_distance_achieved = curr_state['max_distance_achieved']
+                    if 'phase_transition_done' in curr_state:
+                        get_curriculum_state.phase_transition_done = set(curr_state['phase_transition_done'])
+                    
+                    # Restaurer le cache de update_curriculum
+                    update_curriculum.cached_curriculum_values = (
+                        curr_state.get('random_percentage'),
+                        curr_state.get('bump_ratio'),
+                        curr_state.get('max_steps'),
+                        curr_state.get('current_phase'),
+                        curr_state.get('current_distance'),
+                        False  # phase_changed = False au démarrage
+                    )
+                    print(f"{'='*70}\n")
                 
                 start_iteration = saved_iteration + 1  # Reprendre à l'itération suivante
                 print(f"   OK: Model loaded with metadata! Resuming at iteration {start_iteration}")
@@ -1131,15 +1416,21 @@ def train(config_path="config.yaml", **kwargs):
     logprobs = torch.zeros((num_steps, num_envs), device=device)
     rewards = torch.zeros((num_steps, num_envs), device=device)
     dones = torch.zeros((num_steps, num_envs), device=device)
+    terminateds = torch.zeros((num_steps, num_envs), device=device)  # Pour GAE correct
     values = torch.zeros((num_steps, num_envs), device=device)
     
     # Init
     if 'global_step' not in locals():
         global_step = 0  # Initialiser si pas déjà fait lors du chargement
     start_time = time.time()
-    next_obs, _ = envs.reset(seed=seed)
+    # Au redémarrage, ne pas utiliser le seed fixe pour avoir de la variété
+    if start_iteration > 1:
+        next_obs, _ = envs.reset()  # Pas de seed = aléatoire
+    else:
+        next_obs, _ = envs.reset(seed=seed)  # Premier démarrage = seed fixe
     next_obs = torch.tensor(next_obs, dtype=torch.float32, device=device)
     next_done = torch.zeros(num_envs, device=device)
+    next_terminated = torch.zeros(num_envs, device=device)
     
     # Métriques par batch (configurable) - Charger existantes si disponibles
     batch_metrics, last_batch_episode = load_existing_metrics("models/training_metrics.csv")
@@ -1162,6 +1453,7 @@ def train(config_path="config.yaml", **kwargs):
         'collision': 0,
         'out_of_bounds': 0,
         'stuck': 0,
+        'no_progress': 0,
         'truncated': 0,
         'terminated': 0,
     }
@@ -1185,6 +1477,7 @@ def train(config_path="config.yaml", **kwargs):
             print(f"CURRICULUM CHECK (Iteration {iteration})")
             print(f"{'='*70}")
             print(f"Last batch: #{last_batch['batch_num']} | Episodes {last_batch['episodes_range']} | Distance: {last_batch_distance:.1f}m")
+            print()
             
             # Mettre à jour le curriculum basé sur le dernier batch
             combined_metrics = get_combined_metrics(batch_metrics, "models/temp_training_metrics.csv")
@@ -1202,7 +1495,11 @@ def train(config_path="config.yaml", **kwargs):
                     cached = list(update_curriculum.cached_curriculum_values)
                     cached[5] = False  # phase_changed = False
                     update_curriculum.cached_curriculum_values = tuple(cached)
-            
+        else:
+            print(f"\n{'='*70}")
+            print(f"CURRICULUM CHECK (Iteration {iteration})")
+            print(f"{'='*70}")
+            print("No batch metrics available yet")
             print(f"{'='*70}\n")
         
         # === COLLECTE ROLLOUTS (parallèle sur num_envs) ===
@@ -1210,6 +1507,7 @@ def train(config_path="config.yaml", **kwargs):
             global_step += num_envs
             obs[step] = next_obs
             dones[step] = next_done
+            terminateds[step] = next_terminated
             
             with torch.no_grad():
                 action, logprob, _, value = agent.get_action_and_value(next_obs)
@@ -1220,11 +1518,17 @@ def train(config_path="config.yaml", **kwargs):
             
             # Step tous les envs en parallèle
             next_obs_np, reward, term, trunc, infos = envs.step(action.cpu().numpy())
-            next_done_np = np.logical_or(term, trunc)
+            
+            # IMPORTANT: Pour GAE, on doit distinguer terminated (vraie fin) et truncated (timeout)
+            # - terminated: nextnonterminal = 0 (pas de bootstrap)
+            # - truncated: nextnonterminal = 1 (bootstrap avec value function)
+            next_done_np = np.logical_or(term, trunc)  # Pour reset des envs
+            next_terminated_np = term  # Pour GAE (seulement les vraies terminaisons)
             
             rewards[step] = torch.tensor(reward, device=device)
             next_obs = torch.tensor(next_obs_np, dtype=torch.float32, device=device)
             next_done = torch.tensor(next_done_np, dtype=torch.float32, device=device)
+            next_terminated = torch.tensor(next_terminated_np, dtype=torch.float32, device=device)
             
             # Log épisodes terminés - LOGIQUE CORRIGÉE
             for i in range(num_envs):
@@ -1306,6 +1610,14 @@ def train(config_path="config.yaml", **kwargs):
                                 is_random = is_random_list[i]
                             else:
                                 is_random = False
+                            
+                            # Récupérer corridor seed
+                            corridor_seed_list = infos.get('corridor_seed', [])
+                            corridor_seed_mask = infos.get('_corridor_seed', [])
+                            if i < len(corridor_seed_list) and i < len(corridor_seed_mask) and corridor_seed_mask[i]:
+                                corridor_seed = corridor_seed_list[i]
+                            else:
+                                corridor_seed = -1
                         
                         else:
                             # Fallback complet
@@ -1315,6 +1627,7 @@ def train(config_path="config.yaml", **kwargs):
                             steps = 0
                             corridor_type = 'unknown'
                             is_random = False
+                            corridor_seed = -1
                             
                     except (IndexError, KeyError, TypeError, AttributeError) as e:
                         # Fallback en cas d'erreur
@@ -1324,12 +1637,14 @@ def train(config_path="config.yaml", **kwargs):
                         steps = 0
                         corridor_type = 'unknown'
                         is_random = False
+                        corridor_seed = -1
                         print(f"  WARNING: Episode info extraction failed for env {i}: {e}")
                     
                     # Créer un dict info pour le log
                     info = {
                         'corridor_type': corridor_type,
-                        'is_random': is_random
+                        'is_random': is_random,
+                        'corridor_seed': corridor_seed
                     }
                     
                     episode_returns.append(ret)
@@ -1341,8 +1656,14 @@ def train(config_path="config.yaml", **kwargs):
                     # Log individuel pour chaque épisode avec type de corridor
                     corridor_type = info.get('corridor_type', 'unknown')
                     is_random = info.get('is_random', False)
+                    corridor_seed = info.get('corridor_seed', -1)
                     random_str = "random" if is_random else "fixed"
-                    print(f"Episode {total_episodes:>3}: {reason:<9} | Steps: {steps:>4} | Distance: {dist:>5.2f}m | Reward: {ret:>5.1f} | Corridor: {corridor_type}-{random_str}")
+                    log_line = f"Episode {total_episodes:>3}: {reason:<9} | Steps: {steps:>4} | Distance: {dist:>5.2f}m | Reward: {ret:>5.1f} | Corridor: {corridor_type}-{random_str} | Seed: {corridor_seed}"
+                    print(log_line)
+                    
+                    # Écrire dans le fichier
+                    episodes_log_file.write(log_line + "\n")
+                    episodes_log_file.flush()  # Force l'écriture immédiate
                     
                     if ret > best_return:
                         best_return = ret
@@ -1361,12 +1682,15 @@ def train(config_path="config.yaml", **kwargs):
             advantages = torch.zeros_like(rewards)
             lastgae = 0
             
+            # GAE avec distinction terminated vs truncated
+            # - terminated: nextnonterminal = 0 (pas de bootstrap, vraie fin)
+            # - truncated: nextnonterminal = 1 (bootstrap avec value, timeout artificiel)
             for t in reversed(range(num_steps)):
                 if t == num_steps - 1:
-                    nextnonterminal = 1.0 - next_done
+                    nextnonterminal = 1.0 - next_terminated  # Utiliser terminated, pas done
                     nextvalues = next_value
                 else:
-                    nextnonterminal = 1.0 - dones[t + 1]
+                    nextnonterminal = 1.0 - terminateds[t + 1]  # Utiliser terminated, pas done
                     nextvalues = values[t + 1]
                 
                 delta = rewards[t] + gamma * nextvalues * nextnonterminal - values[t]
@@ -1547,23 +1871,40 @@ def train(config_path="config.yaml", **kwargs):
         
         # Sauvegarde périodique
         if iteration % save_interval == 0:
+            # NOUVEAU: Fusionner les métriques temp avec les principales AVANT de sauvegarder le modèle
+            batch_metrics = merge_and_sync_metrics(batch_metrics, "models/temp_training_metrics.csv", "models/training_metrics.csv")
+            print(f"METRICS: All metrics synchronized to models/training_metrics.csv")
+            
             model_path = f"models/ppo_corridor_{global_step}.pth"
+            
+            # Récupérer l'état du curriculum depuis le cache
+            curriculum_state = None
+            if hasattr(update_curriculum, 'cached_curriculum_values'):
+                cached = update_curriculum.cached_curriculum_values
+                curriculum_state = {
+                    'random_percentage': cached[0],
+                    'bump_ratio': cached[1],
+                    'max_steps': cached[2],
+                    'current_phase': cached[3],
+                    'current_distance': cached[4],
+                    'phase_distance_history': getattr(get_curriculum_state, 'phase_distance_history', []),
+                    'max_distance_achieved': getattr(get_curriculum_state, 'max_distance_achieved', 0.0),
+                    'phase_transition_done': list(getattr(get_curriculum_state, 'phase_transition_done', set()))
+                }
             
             # NOUVEAU: Sauvegarder avec métadonnées (itération, global_step, etc.)
             save_data = {
                 'model_state_dict': agent.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),  # Sauvegarder l'état de l'optimiseur
                 'iteration': iteration,
                 'global_step': global_step,
                 'total_episodes': total_episodes,
                 'batch_size': batch_size,
-                'config_path': config_path if 'config_path' in locals() else 'config.yaml'
+                'config_path': config_path if 'config_path' in locals() else 'config.yaml',
+                'curriculum_state': curriculum_state
             }
             torch.save(save_data, model_path)
             print(f"SAVE: Model saved to {model_path} (iteration {iteration})")
-            
-            # NOUVEAU: Fusionner les métriques temp avec les principales et sauvegarder
-            batch_metrics = merge_and_sync_metrics(batch_metrics, "models/temp_training_metrics.csv", "models/training_metrics.csv")
-            print(f"METRICS: All metrics synchronized to models/training_metrics.csv")
         
         # Afficher graphiques avec toutes les métriques (principales + temp)
         if iteration % plot_interval == 0 and iteration > 0 and batch_metrics:
@@ -1606,19 +1947,38 @@ def train(config_path="config.yaml", **kwargs):
     
     # Sauvegarde finale
     final_path = "models/ppo_corridor_final.pth"
+    
+    # Récupérer l'état du curriculum pour la sauvegarde finale
+    curriculum_state = None
+    if hasattr(update_curriculum, 'cached_curriculum_values'):
+        cached = update_curriculum.cached_curriculum_values
+        curriculum_state = {
+            'random_percentage': cached[0],
+            'bump_ratio': cached[1],
+            'max_steps': cached[2],
+            'current_phase': cached[3],
+            'current_distance': cached[4],
+            'phase_distance_history': getattr(get_curriculum_state, 'phase_distance_history', []),
+            'max_distance_achieved': getattr(get_curriculum_state, 'max_distance_achieved', 0.0),
+            'phase_transition_done': list(getattr(get_curriculum_state, 'phase_transition_done', set()))
+        }
+    
     final_save_data = {
         'model_state_dict': agent.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),  # Sauvegarder l'état de l'optimiseur
         'iteration': num_iterations,
         'global_step': total_timesteps,
         'total_episodes': total_episodes,
         'batch_size': batch_size,
         'config_path': config_path if 'config_path' in locals() else 'config.yaml',
+        'curriculum_state': curriculum_state,
         'training_completed': True
     }
     torch.save(final_save_data, final_path)
     print(f"\nModèle sauvegardé: {final_path} (training completed)")
     print(f"{'='*70}\n")
     
+    episodes_log_file.close()
     envs.close()
     return final_path
 

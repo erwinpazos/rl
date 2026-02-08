@@ -4,19 +4,19 @@
 # Paramètres d'entraînement PPO
 training:
   total_timesteps: 8000000  # Nombre total de steps d'entraînement
-  num_envs: 32             # Nombre d'environnements parallèles
-  num_steps: 1500          # Steps par rollout par environnement
+  num_envs: 30             # Nombre d'environnements parallèles
+  num_steps: 1024          # Steps par rollout par environnement
   num_minibatches: 32      # Nombre de mini-batches pour l'update
   update_epochs: 10        # Nombre d'époques d'optimisation par update
   seed: 1                  # Seed pour la reproductibilité
 
 # Hyperparamètres PPO
 ppo:
-  lr: 0.0006              # Learning rate
+  lr: 0.0004              # Learning rate
   gamma: 0.995            # Facteur de discount (récompenses futures)
   gae_lambda: 0.98        # Lambda pour Generalized Advantage Estimation
-  clip_coef: 0.25          # Coefficient de clipping PPO
-  ent_coef: 0.02          # Coefficient d'entropie (exploration)
+  clip_coef: 0.2          # Coefficient de clipping PPO
+  ent_coef: 0.01          # Coefficient d'entropie (exploration)
   vf_coef: 0.5            # Coefficient de la value function loss
   max_grad_norm: 0.5      # Clipping des gradients
 
@@ -28,7 +28,7 @@ optimizer:
 environment:
   max_steps: 7000                                    # Steps max par épisode pour test ou si curriculum desactivé
   use_random_corridor: true                          # true = corridors aléatoires, false = corridor fixe
-  corridor_xml: "corridor_3x100_no_full_obstacles.xml"  # Fichier corridor si use_random_corridor=false
+  corridor_xml: "corridor_yguel.xml"  # Fichier corridor si use_random_corridor=false
 
 # Architecture du réseau de neurones
 # Le réseau traite 3 types d'info : état robot (7 valeurs) + historique + grille de vision
@@ -51,7 +51,7 @@ network:
 logging:
   log_interval: 1          # Afficher métriques toutes les N itérations
   save_interval: 5        # Sauvegarder modèle toutes les N itérations
-  render_interval: 5       # Tester visuellement toutes les N itérations : render mujoco
+  render_interval: 10       # Tester visuellement toutes les N itérations : render mujoco
   plot_interval: 5         # Mettre à jour graphiques toutes les N itérations
   batch_size_metrics: 20   # Taille batch pour calcul métriques des logs (graphiques)
 
@@ -71,38 +71,13 @@ curriculum:
   random_corridor_schedule:
     - distance: 0          # Distance moyenne ≥ 0m
       random_percentage: 1.0  # 20% aléatoire = 80% corridor fixe
-    - distance: 20         # Distance moyenne ≥ 20m
-      random_percentage: 1.0   # 30% aléatoire, 70% fixe
-    - distance: 40         # Distance moyenne ≥ 40m
-      random_percentage: 1.0  # 50% aléatoire, 50% fixe
-    - distance: 60         # Distance moyenne ≥ 60m
-      random_percentage: 1.0  # 75% aléatoire, 25% fixe
-    - distance: 80         # Distance moyenne ≥ 80m
-      random_percentage: 1.0   # 100% aléatoire
-  
-  # Curriculum basé sur le nombre de steps max par épisode (par phase)
-  max_steps_schedule:
-    - distance: 0          # Distance moyenne ≥ 0m
-      max_steps: 3000      # 3000 steps max (plus facile)
-    - distance: 20         # Distance moyenne ≥ 20m
-      max_steps: 4000      # 4000 steps max (intermédiaire)
-    - distance: 40         # Distance moyenne ≥ 40m
-      max_steps: 5000      # 5000 steps max (plus difficile)
-    - distance: 60         # Distance moyenne ≥ 60m
-      max_steps: 6000      # 6000 steps max (très difficile)
-  
+
   # Curriculum basé sur le ratio de bumps (progression des phases)
   # Toujours 100% holes + X% bumps en plus
   bump_ratio_schedule:
     - phase: 1             # Phase 1: Holes only (0% bumps)
-      bump_ratio: 0.0
-      distance_threshold: 60  # Passer à la phase 2 quand distance ≥ 60m
-    - phase: 2             # Phase 2: Holes + 30% bumps
-      bump_ratio: 0.3
-      distance_threshold: 60  # Passer à la phase 3 quand distance ≥ 60m
-    - phase: 3             # Phase 3: Holes + 60% bumps
-      bump_ratio: 0.6
-      distance_threshold: null # Phase finale
+      bump_ratio: 1.0
+      distance_threshold: null  # Passer à la phase 2 quand distance ≥ 60m
 
 # Paramètres physiques du robot (lus automatiquement depuis le XML)
 robot:
@@ -114,16 +89,16 @@ robot:
 # Configuration de la vision ego-centrique
 vision:
   cell_size: 0.2           # Taille d'une cellule de grille (m)
-  vision_front: 3        # Distance de vision devant le robot (m)
-  vision_behind: 1       # Distance de vision derrière le robot (m)
-  vision_left: 1.5         # Distance de vision à gauche (m)
-  vision_right: 1.5        # Distance de vision à droite (m)
+  vision_front: 5        # Distance de vision devant le robot (m)
+  vision_behind: 2       # Distance de vision derrière le robot (m)
+  vision_left: 2         # Distance de vision à gauche (m)
+  vision_right: 2        # Distance de vision à droite (m)
   # Grille calculée automatiquement : (5.2+0.5)/0.1 × (1.5+1.5)/0.1 = 57×30 cellules
 
 # Configuration de l'historique temporel
 history:
-  history_interval: 15     # Sauvegarder position tous les N steps
-  history_length: 4        # Nombre de positions passées à retenir
+  history_interval: 20     # Sauvegarder position tous les N steps
+  history_length: 8        # Nombre de positions passées à retenir
   # Dimension calculée : 4 frames × 6 valeurs (pos+vel) = 24 valeurs
 
 # Paramètres des corridors générés
@@ -136,7 +111,7 @@ corridor:
 # Système de récompenses et pénalités
 rewards:
   # Récompenses de terminaison (épisode se termine)
-  success_reward: 0.0      # Récompense pour atteindre success_distance
+  success_reward: 50.0      # Récompense pour atteindre success_distance
   failure_penalty: -5.0     # Pénalité pour échecs (fell, flipped)
   
   # Récompenses continues (à chaque step)
@@ -145,3 +120,8 @@ rewards:
   
   # Seuils de détection
   fell_threshold: 0.15       # Seuil de hauteur pour "fell" (robot tombe si z < seuil)
+  
+  # Terminaison pour manque de progrès
+  no_progress_check_interval: 500  # Vérifier progrès tous les N steps
+  no_progress_min_distance: 0.5    # Distance minimale requise (m)
+  no_progress_penalty: -4.0        # Pénalité si pas assez de progrès
