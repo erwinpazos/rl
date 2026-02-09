@@ -1,357 +1,534 @@
-# PPO Small Robot Steer - Navigation avec Contrôle par Volant
+# PPO Final - Robot Navigation avec Vision CNN
 
-## Vue d'ensemble
+Entraînement PPO pour un robot 4 roues naviguant dans un corridor avec obstacles (bumps) et trous, utilisant une vision CNN ego-centrique.
 
-Ce projet implémente un agent PPO (Proximal Policy Optimization) pour naviguer un robot 4 roues dans des corridors avec **contrôle par volant** (steering + speed) au lieu de 4 roues indépendantes.
+---
 
-**Innovation clé**: 
-- **Contrôle simplifié**: 2 actions (angle volant + vitesse) au lieu de 4 roues
-- **Vision 2 canaux**: Grilles binaires séparées pour obstacles et trous
-- **Système de récompenses simplifié**: Pas de guidage artificiel, apprentissage naturel
-- **Configuration JSON**: Tous les paramètres externalisés et modifiables
+## 📁 Structure du Projet
 
-## Architecture du Système
+### 🔧 Fichiers de Configuration
 
-### 1. Environnement (`corridor_env.py`)
+#### `config.yaml`
+Configuration centrale du projet. Contient tous les hyperparamètres:
+- **PPO**: learning rate, gamma, GAE lambda, epochs, clip epsilon
+- **Training**: nombre d'environnements parallèles, steps par rollout, batch sizes
+- **Network**: architecture CNN et MLP (couches, tailles)
+- **Vision**: dimensions de la grille, cell_size, distances de vision
+- **Robot**: paramètres de contrôle (steering max, vitesse max, spawn angle)
+- **Corridor**: longueur, largeur, distance de succès
+- **Rewards**: récompenses/pénalités pour succès, échec, progression, collision, no-progress
+- **Curriculum**: progression automatique basée sur la distance moyenne
+  - `random_corridor_schedule`: % de corridors aléatoires vs fixes
+  - `bump_ratio_schedule`: ratio de bumps ajoutés aux trous par phase
 
-**Concept**: Robot 4 roues naviguant dans un corridor avec **contrôle par volant** (steering + speed).
+---
 
-**Contrôle par volant**:
-- **Action 0**: Angle de volant (±1.0 → ±30°)
-- **Action 1**: Vitesse (±1.0 → ±1.0 m/s)
-- **Conversion automatique**: Steering + speed → vitesses des 4 roues via cinématique
+### 🤖 Environnement
 
-**Observation (3655 valeurs)** - **Vision 2 canaux + historique simplifié**:
+#### `corridor_env.py`
+Environnement Gymnasium pour le robot dans le corridor.
 
-**1. État robot (7 valeurs)**:
-- Position: `(x, y, z)` du centre du robot
-- Vitesse: `(vx, vy, vz)` du centre de masse  
-- Angle: orientation du robot (radians)
+**Caractéristiques:**
+- **Observation**: 
+  - État robot: position (x,y,z), vitesse (vx,vy,vz), angle (θ)
+  - Historique: 8 frames de vitesses passées (48 valeurs)
+  - Grille CNN: 35×20×2 canaux (obstacles, trous) - vision ego-centrique
+- **Action**: 
+  - `steering_angle`: angle de volant normalisé [-1, 1] → [-30°, +30°]
+  - `speed`: vitesse normalisée [-1, 1] → [-1, +1] m/s
+- **Récompenses**:
+  - Progression en X: `progress_multiplier × distance`
+  - Collision avec bump: `collision_penalty` par step
+  - Succès (100m): `success_reward`
+  - Échec (tombé/renversé): `failure_penalty`
+  - No-progress: `no_progress_penalty` si < 0.5m en 500 steps
+- **Terminaisons**:
+  - `fell`: robot tombé (z < 0.15m)
+  - `flipped`: robot renversé (angle > 60°)
+  - `no_progress`: pas de progression suffisante
+  - `success`: distance ≥ 100m (truncated, pas terminated)
 
-**2. Historique positions (48 valeurs)** - **Anticipation sans bounding box**:
-- **Structure**: 8 frames × 6 valeurs = 48 total
-- **Contenu par frame**: 3 positions + 3 vitesses (plus de bounding box)
-- **Fréquence**: Sauvegarde toutes les 10 steps
-- **Format relatif**: Différences par rapport à l'état actuel
-- **Objectif**: Apprendre la dynamique sans redondance
+**Méthodes importantes:**
+- `_build_ego_centric_grid()`: Construit la grille de vision centrée et orientée selon le robot
+- `_build_cell_map_from_xml()`: Parse le XML MuJoCo pour créer la carte des cellules
+- `_build_model_from_new_generator()`: Génère un corridor aléatoire avec le générateur
+- `_compute_reward()`: Calcule la récompense basée sur progression et collisions
 
-**3. Grille vision 2 canaux (3600 valeurs)** - **Perception binaire optimisée**:
-- **Dimensions**: 60 lignes × 30 colonnes × 2 canaux = 3600 valeurs
-- **Canal 0 - Obstacles**: 1.0 = bump OU murs latéraux, 0.0 = navigable
-- **Canal 1 - Trous**: 1.0 = trou OU extérieur avant/arrière, 0.0 = navigable
-- **Sol navigable**: Les deux canaux à 0.0
-- **Logique physique**:
-  - Côtés du couloir = murs infinis (obstacles)
-  - Devant/derrière du couloir = vide (trous, robot tombe)
+**Détection des types de cellules:**
+- Trous: géométries avec "hole" dans le nom OU absence de géométrie
+- Bumps: géométries avec "bump" dans le nom
+- Sol: géométries avec "flat", "floor", ou "cell" dans le nom
 
-**Vision ego-centrique**:
-- **Couverture**: 0.8m derrière + 5.2m devant × 3m largeur
-- **Robot fixe**: Toujours à la ligne 8, colonne 15
-- **Rotation**: Grille tourne avec le robot (comme caméra embarquée)
+---
 
-**Actions (2 valeurs)** - **Contrôle par volant**:
-- `action[0]`: Angle de volant (±1.0 → ±30°)
-- `action[1]`: Vitesse (±1.0 → ±1.0 m/s)
+#### `corridor_generator_similar.py`
+Générateur procédural de corridors avec trous et bumps.
 
-**Conversion en vitesses roues**:
-```python
-steering_angle = action[0] * 30.0  # degrés
-speed = action[1] * 1.0           # m/s
+**Fonctionnalités:**
+- Génère des patterns de trous espacés de ~4m
+- Ajoute des bumps entre les trous selon un ratio configurable
+- Évite les répétitions de positions Y consécutives
+- Crée de vrais trous en supprimant les tuiles de sol
+- Génère des tuiles de 0.5m × 0.5m
 
-# Conversion en yaw rate puis vitesses roues
-yaw_rate = steering_angle * (max_yaw_rate / max_steering_angle)
-w_left = (speed - yaw_rate * track_width/2) / wheel_radius
-w_right = (speed + yaw_rate * track_width/2) / wheel_radius
+**Méthodes principales:**
+- `generate_hole_pattern(length, seed)`: Génère positions des trous
+- `generate_bump_pattern()`: Génère positions des bumps entre trous
+- `generate_corridor_xml(length, width, seed, obstacle_type, bump_ratio)`: Génère XML complet
+- `save_corridor(filename, ...)`: Sauvegarde le corridor en fichier XML
+
+**Paramètres:**
+- Trous: 1 tuile (0.5m) en X, 2 tuiles (0.5m) en Y
+- Bumps: 1 tuile (0.5m) cubique
+- Positions Y: 6 niveaux pour bumps, 4 pour trous (symétriques)
+
+---
+
+### 🎓 Entraînement
+
+#### `train_ppo.py`
+Script principal d'entraînement PPO avec environnements parallèles.
+
+**Architecture:**
+- **Agent**: CNN + MLP avec 3 branches
+  - Robot net: MLP pour état robot (7 → 32)
+  - History net: MLP pour historique (48 → 32)
+  - CNN: 2 couches conv pour grille (35×20×2 → 64)
+  - Backbone: Fusion des 3 branches (128 → 64)
+  - Actor/Critic: Têtes séparées
+- **Optimisation**: Adam avec learning rate configurable
+- **Parallélisation**: 30 environnements asynchrones (AsyncVectorEnv)
+- **Batch processing**: Gros batches (30,720 steps) pour GPU
+
+**Fonctionnalités:**
+- Sauvegarde automatique tous les 10 batches
+- Sauvegarde de l'état de l'optimizer pour reprise stable
+- Curriculum learning automatique basé sur distance moyenne
+- Logging des épisodes dans `episodes_log.txt`
+- Métriques CSV par batch de 20 épisodes
+- Graphiques de progression (return, distance, succès, survie)
+
+**Curriculum:**
+- Phase 1: 100% corridors aléatoires, 100% bumps
+- Phase 2: Débloquée à 50m de distance moyenne
+- Phase 3: Débloquée à 70m de distance moyenne
+- Progression irréversible (pas de régression)
+
+**Commandes:**
+```bash
+# Nouvel entraînement
+python3 train_ppo.py
+
+# Reprendre entraînement (détection auto du dernier modèle)
+python3 train_ppo.py
 ```
 
-**Récompenses simplifiées**:
-- **Succès**: +100 (x ≥ 100m)
-- **Échecs**: -10 (tombé, retourné, collision)
-- **Progression**: +10 × delta_x (récompense continue pour avancer)
-- **Pas de bonus complexes**: Évite le reward hacking
+---
 
-**Terminaisons** - **Détection précise et naturelle**:
+#### `test_ppo.py`
+Test d'un agent entraîné avec visualisation.
 
-**1. Fell (tombé dans trou)**:
-```python
-if z < 0.15:  # Seuil de hauteur critique
-    return -10.0, True, {'reason': 'fell'}
-```
-- **Logique**: Robot tombe quand il n'y a pas de géométrie sous lui
-- **Seuil**: 0.15m sous la hauteur normale (0.45m spawn)
-- **Inclut**: Tomber dans un trou OU sortir du couloir (pas de sol à l'extérieur)
+**Options:**
+- `--model PATH`: Chemin du modèle (auto-détection si omis)
+- `--episodes N`: Nombre d'épisodes à tester (défaut: 5)
+- `--render`: Afficher la simulation MuJoCo
+- `--show-vision`: Afficher la fenêtre tkinter avec vision CNN
+- `--bump RATIO`: Ratio de bumps (0.0-1.0)
+- `--corridor FILE`: Utiliser un corridor XML spécifique
 
-**2. Flipped (robot retourné)**:
-```python
-quat = self.data.qpos[3:7]
-up_z = 1 - 2 * (quat[1]**2 + quat[2]**2)  # Composante Z du vecteur "up"
-if up_z < 0:  # Robot à l'envers
-    return -10.0, True, {'reason': 'flipped'}
-```
-- **Logique**: Calcul du vecteur "up" depuis le quaternion d'orientation
-- **Robuste**: Détecte retournement quelle que soit l'orientation XY
+**Fenêtre Vision CNN:**
+- 3 vues: Canal 0 (obstacles), Canal 1 (trous), Vue combinée
+- Zone de logs avec progression de l'épisode
+- Mise à jour en temps réel toutes les 5 steps
 
-**3. Success (objectif atteint)**:
-```python
-if x >= 100.0:  # Fin du couloir
-    return 100.0, True, {'reason': 'success'}
+**Commandes:**
+```bash
+# Test avec render et vision
+python3 test_ppo.py --render --show-vision --episodes 3
+
+# Test avec bump ratio spécifique
+python3 test_ppo.py --render --bump 0.5
+
+# Test avec corridor fixe
+python3 test_ppo.py --render --corridor corridor_yguel.xml
 ```
 
-**4. Truncated (timeout)**:
-- **Limite**: 3000 steps par épisode
-- **Calcul**: ~10 minutes à 30 FPS, assez pour parcourir 100m à vitesse normale
+---
 
-**Note importante**: Pas de terminaison artificielle pour sortie du couloir ! Le robot apprend naturellement en tombant dans le vide (pas de géométrie hors du couloir).
+### 🎮 Contrôle Manuel
 
-### 2. Configuration JSON (`config.json`)
+#### `manual_control.py`
+Contrôle manuel du robot avec les flèches du clavier.
 
-**Système de configuration externalisé** pour tous les paramètres d'entraînement:
+**Contrôles:**
+- `↑`: Accélérer (toggle ON/OFF)
+- `↓`: Freiner/Reculer (toggle ON/OFF)
+- `←`: Tourner à gauche (toggle ON/OFF)
+- `→`: Tourner à droite (toggle ON/OFF)
+- `ESPACE`: Arrêt d'urgence (reset tous les états)
+- `R`: Reset environnement
+- `ESC`: Quitter
 
-```json
+**Options:**
+- `--seed N`: Utiliser un seed spécifique pour le corridor
+- `--fixed`: Utiliser un corridor fixe au lieu d'aléatoire
+- `--bump RATIO`: Ratio de bumps (0.0-1.0)
+
+**Fenêtre Vision CNN:**
+- Même interface que test_ppo.py
+- Affiche la vision du robot en temps réel
+- Logs des commandes et statut
+
+**Commandes:**
+```bash
+# Corridor aléatoire avec vision
+python3 manual_control.py
+
+# Corridor avec seed spécifique
+python3 manual_control.py --seed 9371 --bump 1.0
+
+# Corridor fixe
+python3 manual_control.py --fixed --bump 0.3
+```
+
+---
+
+### 📊 Visualisation
+
+#### `plot_metrics.py`
+Génère des graphiques de progression depuis les métriques CSV.
+
+**Graphiques:**
+- Return moyen par batch
+- Distance moyenne par batch
+- Taux de succès par batch
+- Durée moyenne (steps) par batch
+
+**Commande:**
+```bash
+python3 plot_metrics.py
+```
+
+Génère: `models/training_progress_latest.png`
+
+---
+
+#### `visualize_corridor_map.py`
+Visualise la carte des cellules d'un corridor.
+
+**Fonctionnalités:**
+- Affiche la cell_map avec couleurs (sol, bumps, trous)
+- Montre la position du robot
+- Utile pour débugger la détection des obstacles
+
+**Commande:**
+```bash
+python3 visualize_corridor_map.py --corridor corridor_yguel.xml
+```
+
+---
+
+### 🧪 Utilitaires de Test
+
+#### `generate_test_corridor.py`
+Génère un corridor de test avec le générateur pour analyse.
+
+**Utilité:**
+- Vérifier que le générateur fonctionne correctement
+- Analyser les positions des trous et bumps
+- Tester avec des seeds spécifiques
+
+**Commande:**
+```bash
+python3 generate_test_corridor.py
+```
+
+Génère: `corridor_test_generated.xml`
+
+---
+
+### 🗺️ Fichiers XML
+
+#### `four_wheel_robot.xml`
+Définition du robot 4 roues pour MuJoCo.
+
+**Caractéristiques:**
+- Empattement: 0.50m
+- Voie: 0.40m
+- Rayon des roues: 0.15m
+- 4 roues avec joints de rotation
+- Contrôle par steering angle + speed
+
+---
+
+#### `corridor_yguel.xml`
+Corridor de test avec trous et bumps.
+
+**Spécificités:**
+- Trous représentés par `floor_hole_tile` avec `contype="0"` (pas de collision)
+- Bumps représentés par `floor_bump`
+- Tuiles de sol: `floor_flat`
+- Longueur: ~100m
+
+---
+
+#### `corridor_erwin.xml`
+Autre corridor de test (variante).
+
+---
+
+### 📂 Dossiers
+
+#### `models/`
+Contient les modèles sauvegardés et métriques.
+
+**Fichiers:**
+- `ppo_corridor_XXXXXX.pth`: Checkpoints du modèle (tous les 10 batches)
+- `training_metrics.csv`: Métriques par batch (20 épisodes)
+- `temp_training_metrics.csv`: Métriques temporaires (fusionnées à la sauvegarde)
+- `training_progress_iter_XXX.png`: Graphiques de progression
+
+**Format du checkpoint (.pth):**
+```python
 {
-  "training": {
-    "total_timesteps": 8000000,
-    "num_envs": 32,
-    "num_steps": 1024
-  },
-  "ppo": {
-    "update_epochs": 10,
-    "num_minibatches": 32,
-    "clip_coef": 0.2,
-    "ent_coef": 0.05,
-    "vf_coef": 0.5
-  },
-  "optimizer": {
-    "lr": 5e-4,
-    "eps": 1e-5
-  },
-  "environment": {
-    "max_steps": 3000,
-    "corridor_xml": null
-  },
-  "network": {
-    "robot_state_dim": 7,
-    "history_dim": 48,
-    "grid_dim": 3600,
-    "cnn_channels": [32, 64, 128]
-  }
+    'model_state_dict': ...,      # Poids du réseau
+    'optimizer_state_dict': ...,  # État de l'optimizer (Adam)
+    'iteration': N,               # Numéro d'itération
+    'global_step': XXXXX,         # Steps totaux
+    'total_episodes': XXX,        # Épisodes totaux
+    'curriculum_state': {         # État du curriculum
+        'phase': N,
+        'distance': X.X,
+        'random_percentage': X.X,
+        'bump_ratio': X.X
+    }
 }
 ```
 
-**Outils de configuration**:
-- `config.json` - Configuration principale
-- `config_example.json` - Version documentée avec commentaires
-- `config_debug.json` / `config_production.json` - Presets
-- `validate_config.py` - Validation et comparaison
-- `generate_config.py` - Génération automatique
+---
 
-### 3. Architecture Réseau (`train_ppo.py`)
+#### `final_working_model/`
+Sauvegarde du meilleur modèle final.
 
-**Réseau multi-branches optimisé pour vision 2 canaux**:
+---
 
+#### `__pycache__/`
+Cache Python (généré automatiquement).
+
+---
+
+### 📝 Fichiers de Logs
+
+#### `episodes_log.txt`
+Log de tous les épisodes pendant l'entraînement.
+
+**Format:**
 ```
-Observation (3655) → 3 branches parallèles → Fusion → Actor/Critic
-
-Branch 1: Robot State (7) → MLP(64→64) → 64
-Branch 2: History (48) → MLP(128→64→32) → 32  
-Branch 3: Grid 2-channel (60×30×2) → CNN → 128
-
-Fusion: Concat(64+32+128) → MLP(128→64) → 64
-Output: Actor(64→2) + Critic(64→1)
-```
-
-**CNN pour grille 2 canaux**:
-```
-60×30×2 → Conv2d(32,3×3,s=2) → 30×15×32
-        → Conv2d(64,3×3,s=2) → 15×8×64  
-        → Conv2d(128,3×3,s=2) → 8×4×128
-        → Flatten → Linear(4096→128) → 128
+Episode XXX: reason | Steps: XXXX | Distance: XX.XXm | Reward: XX.X | Corridor: type | Seed: XXXX
 ```
 
-**Historique simplifié** - **Sans bounding box**:
-- **Fréquence**: sauvegarde toutes les 10 steps
-- **Longueur**: 8 frames (80 steps d'historique total)
-- **Contenu**: 3 positions + 3 vitesses par frame (6 valeurs)
-- **Format**: coordonnées relatives à la position actuelle
-- **Objectif**: Apprendre la dynamique sans redondance
+**Raisons de terminaison:**
+- `fell`: Tombé dans un trou
+- `flipped`: Renversé
+- `no_progress`: Pas de progression
+- `success`: Objectif atteint (100m)
 
-### 4. Entraînement PPO
+---
 
-**Configuration via JSON**:
-- Tous les hyperparamètres externalisés
-- Presets debug/production disponibles
-- Override possible via ligne de commande
+## 🚀 Workflow Complet
 
-**Hyperparamètres par défaut**:
-- **Environnements parallèles**: 32
-- **Steps par rollout**: 1024
-- **Batch size**: 32,768 (32×1024)
-- **Minibatches**: 32 (1024 samples chacun)
-- **Update epochs**: 10
-- **Learning rate**: 5e-4
-- **Gamma**: 0.995
-- **GAE lambda**: 0.98
-- **Clip coefficient**: 0.2
-
-**Optimisations**:
-- AsyncVectorEnv pour parallélisation
-- Buffers GPU pour vitesse
-- Sauvegarde automatique tous les 10 itérations
-- Reprise d'entraînement automatique
-- Métriques par batch de 20 épisodes
-
-## Utilisation
-
-### Entraînement
-
+### 1. Nouvel Entraînement
 ```bash
-# Entraînement standard avec config.json
-python train_ppo.py
+# Configurer les paramètres dans config.yaml
+nano config.yaml
 
-# Avec configuration spécifique
-python train_ppo.py --config config_debug.json
+# Lancer l'entraînement
+python3 train_ppo.py
 
-# Override de paramètres
-python train_ppo.py --timesteps 20000000 --num-envs 64
-
-# Nouveau démarrage (ignorer modèles existants)
-python train_ppo.py --fresh-start
+# Suivre la progression
+tail -f episodes_log.txt
 ```
 
-### Test
-
+### 2. Reprendre un Entraînement
 ```bash
-# Test avec rendu
-python test_ppo.py --render
+# Le script détecte automatiquement le dernier modèle
+python3 train_ppo.py
 
-# Test avec corridor spécifique
-python test_ppo.py --render --corridor corridor_100.xml
-
-# Plus d'épisodes
-python test_ppo.py --episodes 10
+# Ou spécifier un modèle
+python3 train_ppo.py --model models/ppo_corridor_921600.pth
 ```
 
-### Visualisation
-
-**Outil de débogage** pour comprendre la vision 2 canaux:
-
+### 3. Tester un Modèle
 ```bash
-# Vision 2 canaux du robot
-python visualize_corridor_map.py
+# Test avec visualisation
+python3 test_ppo.py --render --show-vision --episodes 5
 
-# Position spécifique
-python visualize_corridor_map.py --x 50 --y 0.5 --angle 10
-
-# Test positions multiples
-python visualize_corridor_map.py --test-multiple
+# Test avec différents niveaux de difficulté
+python3 test_ppo.py --render --bump 0.0  # Facile (seulement trous)
+python3 test_ppo.py --render --bump 0.5  # Moyen
+python3 test_ppo.py --render --bump 1.0  # Difficile (100% bumps)
 ```
 
-**Exemple de sortie** (vision 2 canaux):
+### 4. Contrôle Manuel
+```bash
+# Tester manuellement avec vision CNN
+python3 manual_control.py
 
-```
-GRILLE 2 CANAUX - 60×30×2:
-
-CANAL 0 - OBSTACLES (bumps + murs latéraux):
-    012345678901234567890123456789
-  0|XXXXXXXXXX████████████XXXXXXXX  
-  1|XXXXXXXXXX████████████XXXXXXXX  
-  8|XXXXXXXXXX██████🤖█████XXXXXXXX  ← Robot
-  
-CANAL 1 - TROUS (holes + extérieur avant/arrière):
-    012345678901234567890123456789
-  0|░░░░░░░░░░████████████░░░░░░░░░░
-  1|░░░░░░░░░░████████████░░░░░░░░░░
-  8|░░░░░░░░░░██████🤖█████░░░░░░░░░░
-
-GRILLE COMBINÉE (perception finale):
-  X = obstacle (canal 0)
-  ░ = trou (canal 1)  
-  █ = sol navigable (les deux canaux à 0)
-  🤖 = robot (toujours centré)
+# Tester un corridor spécifique vu pendant l'entraînement
+python3 manual_control.py --seed 9371 --bump 1.0
 ```
 
-## Fichiers
+### 5. Analyser les Résultats
+```bash
+# Générer les graphiques
+python3 plot_metrics.py
 
-### Core
-- **`corridor_env.py`**: Environnement avec contrôle par volant et vision 2 canaux
-- **`train_ppo.py`**: Entraînement PPO avec configuration JSON
-- **`test_ppo.py`**: Test et évaluation des modèles
-- **`visualize_corridor_map.py`**: Visualisation de la vision 2 canaux
+# Visualiser un corridor
+python3 visualize_corridor_map.py --corridor corridor_yguel.xml
+```
 
-### Configuration
-- **`config.json`**: Configuration principale
-- **`config_example.json`**: Version documentée
-- **`config_debug.json`** / **`config_production.json`**: Presets
-- **`validate_config.py`**: Validation des configurations
-- **`generate_config.py`**: Génération automatique de configs
+---
 
-### Modèles
-- **`four_wheels_robot.xml`**: Modèle MuJoCo du robot
-- **`corridor_100.xml`**: Corridor de test fixe
+## 🔍 Détails Techniques
 
-### Documentation
-- **`REWARD_SYSTEM.md`**: Documentation du système de récompenses simplifié
-- **`CONFIG_README.md`**: Guide d'utilisation des configurations
+### Vision CNN Ego-Centrique
+- **Grille**: 35 lignes × 20 colonnes × 2 canaux
+- **Cell size**: 0.2m × 0.2m
+- **Vision**: 7m devant, 2m derrière, 2m de chaque côté
+- **Robot**: Toujours à la ligne 10, colonne 10 (centre)
+- **Rotation**: La grille tourne avec le robot (ego-centrique)
 
-## Innovations Clés
+**Canal 0 - Obstacles:**
+- 1.0 = Bump OU mur latéral
+- 0.0 = Navigable
 
-### 1. Contrôle par Volant
-**Problème**: Contrôle 4 roues indépendantes complexe et peu naturel
-**Solution**: 2 actions (steering + speed) converties automatiquement en vitesses roues
-**Avantage**: Contrôle plus intuitif, espace d'actions réduit
+**Canal 1 - Trous:**
+- 1.0 = Trou OU extérieur avant/arrière
+- 0.0 = Navigable
 
-### 2. Vision 2 Canaux Binaires
-**Problème**: Grille unique avec valeurs continues difficile à apprendre
-**Solution**: 2 grilles binaires séparées (obstacles/trous) avec logique physique claire
-**Avantage**: CNN plus efficace, représentation plus claire
+**Sol navigable:** Les deux canaux à 0.0
 
-### 3. Système de Récompenses Simplifié
-**Problème**: Récompenses complexes causent du reward hacking
-**Solution**: Seulement succès/échecs/progression, pas de guidage artificiel
-**Avantage**: Apprentissage plus naturel et robuste
+---
 
-### 4. Configuration JSON Externalisée
-**Problème**: Paramètres hardcodés difficiles à ajuster
-**Solution**: Tous les paramètres dans des fichiers JSON avec outils de validation
-**Avantage**: Expérimentation facile, reproductibilité, presets
+### Curriculum Learning
+Le curriculum progresse automatiquement basé sur la distance moyenne:
 
-### 5. Observation Sans Bounding Box
-**Problème**: Bounding box redondante en vision ego-centrique
-**Solution**: Historique simplifié (positions + vitesses uniquement)
-**Avantage**: Observation plus compacte (3655 vs 1902 valeurs), moins de redondance
+**Phase 1** (début):
+- Random corridors: 100%
+- Bump ratio: 100%
+- Seuil: 0m
 
-## Défis Techniques Résolus
+**Phase 2** (distance ≥ 50m):
+- Random corridors: 100%
+- Bump ratio: 50%
+- Seuil: 50m
 
-### 1. Contrôle Simplifié mais Efficace
-**Défi**: Réduire l'espace d'actions sans perdre en capacité de manœuvre
-**Solution**: Conversion steering/speed → vitesses roues via cinématique arcade
-**Résultat**: Actions intuitives avec toutes les capacités de mouvement
+**Phase 3** (distance ≥ 70m):
+- Random corridors: 100%
+- Bump ratio: 30%
+- Seuil: 70m
 
-### 2. Vision Binaire Optimisée
-**Défi**: Représentation efficace de l'environnement pour CNN
-**Solution**: 2 canaux binaires avec logique physique (obstacles vs trous)
-**Résultat**: Apprentissage plus rapide, représentation plus claire
+La progression est **irréversible** - une fois une phase atteinte, on ne régresse jamais.
 
-### 3. Récompenses Sans Biais
-**Défi**: Éviter le reward hacking tout en guidant l'apprentissage
-**Solution**: Récompenses minimales (succès/échecs/progression uniquement)
-**Résultat**: Apprentissage naturel sans comportements artificiels
+---
 
-### 4. Configuration Flexible
-**Défi**: Permettre l'expérimentation facile sans recompilation
-**Solution**: Système JSON complet avec validation et presets
-**Résultat**: Itération rapide, reproductibilité, partage de configs
+### Optimisations
+- **Environnements parallèles**: 30 envs asynchrones
+- **Gros batches**: 30,720 steps par rollout
+- **GPU**: Calculs sur CUDA si disponible
+- **Minibatches**: 960 steps par minibatch (32 minibatches)
+- **Epochs**: 10 epochs par batch
+- **Clip epsilon**: 0.2 pour stabilité
 
-## Résultats Attendus
+---
 
-**Métriques de succès**:
-- Distance moyenne > 50m
-- Taux de succès > 10% (atteindre 100m)
-- Contrôle fluide avec steering/speed
+### Sauvegarde et Reprise
+- **Sauvegarde automatique**: Tous les 10 batches
+- **Optimizer state**: Sauvegardé pour reprise stable
+- **Métriques CSV**: Fusionnées avant sauvegarde pour synchronisation
+- **Curriculum state**: Restauré à la reprise
 
-**Comportements recherchés**:
-- Navigation fluide avec contrôle par volant
-- Évitement efficace obstacles/trous
-- Utilisation optimale de la vision 2 canaux
-- Adaptation rapide aux configurations
+**Important:** L'optimizer state est crucial! Sans lui, les premières itérations après reprise sont catastrophiques.
 
+---
+
+## 🐛 Debugging
+
+### Problème: Trous non détectés
+**Cause:** Les géométries de trous doivent avoir "hole" dans le nom OU être absentes.
+
+**Solution:** Dans le XML, utiliser:
+```xml
+<geom name="floor_hole_tile_X" contype="0" conaffinity="0" .../>
+```
+
+### Problème: Performance catastrophique après reload
+**Cause:** Optimizer state non sauvegardé/restauré.
+
+**Solution:** Vérifier que le checkpoint contient `optimizer_state_dict`.
+
+### Problème: Corridors identiques dans tous les envs
+**Cause:** Utilisation de `np.random.randint()` au lieu de `self.env_random.randint()`.
+
+**Solution:** Toujours utiliser le générateur aléatoire indépendant de chaque env.
+
+---
+
+## 📚 Dépendances
+
+```
+numpy
+torch
+gymnasium
+mujoco
+pyyaml
+matplotlib
+pillow
+tkinter (inclus avec Python)
+```
+
+---
+
+## 🎯 Objectifs du Projet
+
+1. ✅ Robot navigue dans un corridor avec vision CNN
+2. ✅ Détection des trous et bumps
+3. ✅ Curriculum learning automatique
+4. ✅ Entraînement parallèle efficace
+5. ✅ Sauvegarde/reprise stable
+6. ✅ Visualisation en temps réel
+7. ✅ Contrôle manuel pour tests
+
+---
+
+## 📈 Résultats Attendus
+
+- **Phase 1** (100% bumps): ~40m de distance moyenne
+- **Phase 2** (50% bumps): ~60m de distance moyenne
+- **Phase 3** (30% bumps): ~80m+ de distance moyenne
+- **Succès**: Atteindre 100m régulièrement
+
+---
+
+## 🔧 Configuration Recommandée
+
+**Pour entraînement rapide:**
+- 30 environnements parallèles
+- Batch size: 30,720
+- Learning rate: 0.0004
+- GPU: CUDA recommandé
+
+**Pour tests:**
+- 1 environnement
+- Render activé
+- Vision CNN activée
+
+---
+
+## 📞 Support
+
+Pour toute question ou problème, vérifier:
+1. Les logs dans `episodes_log.txt`
+2. Les métriques dans `models/training_metrics.csv`
+3. Les graphiques générés par `plot_metrics.py`
+4. La visualisation du corridor avec `visualize_corridor_map.py`

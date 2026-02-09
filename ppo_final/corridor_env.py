@@ -1051,7 +1051,9 @@ class CorridorEnv(gym.Env):
             
             # Déterminer le type de cellule
             name_lower = name.lower()
-            if 'bump' in name_lower:
+            if 'hole' in name_lower:
+                cell_type = 2  # Trou (vérifier AVANT 'floor' car 'floor_hole' contient 'floor')
+            elif 'bump' in name_lower:
                 cell_type = 1  # Bump
             elif 'wall' in name_lower:
                 cell_type = 1  # Mur = obstacle (comme bump)
