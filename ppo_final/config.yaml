@@ -75,9 +75,12 @@ curriculum:
   # Curriculum basé sur le ratio de bumps (progression des phases)
   # Toujours 100% holes + X% bumps en plus
   bump_ratio_schedule:
-    - phase: 1             # Phase 1: Holes only (0% bumps)
+    - phase: 1        
+      bump_ratio: 0.5
+      distance_threshold: 50 
+    - phase: 2        
       bump_ratio: 1.0
-      distance_threshold: null  # Passer à la phase 2 quand distance ≥ 60m
+      distance_threshold: null
 
 # Paramètres physiques du robot (lus automatiquement depuis le XML)
 robot:
@@ -122,6 +125,6 @@ rewards:
   fell_threshold: 0.15       # Seuil de hauteur pour "fell" (robot tombe si z < seuil)
   
   # Terminaison pour manque de progrès
-  no_progress_check_interval: 500  # Vérifier progrès tous les N steps
-  no_progress_min_distance: 0.5    # Distance minimale requise (m)
+  no_progress_check_interval: 750  # Vérifier progrès tous les N steps
+  no_progress_min_distance: 0.3    # Distance minimale requise (m)
   no_progress_penalty: -4.0        # Pénalité si pas assez de progrès

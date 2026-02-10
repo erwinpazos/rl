@@ -1658,7 +1658,7 @@ def train(config_path="config.yaml", **kwargs):
                     is_random = info.get('is_random', False)
                     corridor_seed = info.get('corridor_seed', -1)
                     random_str = "random" if is_random else "fixed"
-                    log_line = f"Episode {total_episodes:>3}: {reason:<9} | Steps: {steps:>4} | Distance: {dist:>5.2f}m | Reward: {ret:>5.1f} | Corridor: {corridor_type}-{random_str} | Seed: {corridor_seed}"
+                    log_line = f"Episode {total_episodes:>4}: {reason:<11} | Steps: {steps:>4} | Distance: {dist:>6.2f}m | Reward: {ret:>6.1f} | Corridor: {corridor_type}+{random_str} | Seed: {corridor_seed}"
                     print(log_line)
                     
                     # Écrire dans le fichier
