@@ -4,7 +4,7 @@ Entraînement PPO pour un robot 4 roues naviguant dans un corridor avec obstacle
 
 ---
 
-## 🔧 Prérequis
+## Prérequis
 
 ### Installation système (Ubuntu/Debian)
 
@@ -24,9 +24,9 @@ pip install numpy torch gymnasium mujoco pyyaml matplotlib pillow
 
 ---
 
-## 📁 Structure du Projet
+## Structure du Projet
 
-### 🔧 Fichiers de Configuration
+### Fichiers de Configuration
 
 #### `config.yaml`
 Configuration centrale du projet. Contient tous les hyperparamètres:
@@ -104,7 +104,7 @@ Générateur procédural de corridors avec trous et bumps.
 
 ---
 
-### 🎓 Entraînement
+### Entraînement
 
 #### `train_ppo.py`
 Script principal d'entraînement PPO avec environnements parallèles.
@@ -175,7 +175,7 @@ python3 test_ppo.py --render --corridor corridor_yguel.xml
 
 ---
 
-### 🎮 Contrôle Manuel
+### Contrôle Manuel
 
 #### `manual_control.py`
 Contrôle manuel du robot avec les flèches du clavier.
@@ -213,7 +213,7 @@ python3 manual_control.py --fixed --bump 0.3
 
 ---
 
-### 📊 Visualisation
+### Visualisation
 
 #### `plot_metrics.py`
 Génère des graphiques de progression depuis les métriques CSV.
@@ -355,7 +355,7 @@ Episode XXX: reason | Steps: XXXX | Distance: XX.XXm | Reward: XX.X | Corridor: 
 
 ---
 
-## 🚀 Workflow Complet
+## Workflow Complet
 
 ### 1. Nouvel Entraînement
 ```bash
@@ -409,7 +409,7 @@ python3 visualize_corridor_map.py --corridor corridor_yguel.xml
 
 ---
 
-## 🔍 Détails Techniques
+## Détails Techniques
 
 ### Vision CNN Ego-Centrique
 - **Grille**: 35 lignes × 20 colonnes × 2 canaux
@@ -472,7 +472,7 @@ La progression est **irréversible** - une fois une phase atteinte, on ne régre
 
 ---
 
-## 🐛 Debugging
+## Debugging
 
 ### Problème: Trous non détectés
 **Cause:** Les géométries de trous doivent avoir "hole" dans le nom OU être absentes.
@@ -494,19 +494,19 @@ La progression est **irréversible** - une fois une phase atteinte, on ne régre
 
 ---
 
-## 🎯 Objectifs du Projet
+## Objectifs du Projet
 
-1. ✅ Robot navigue dans un corridor avec vision CNN
-2. ✅ Détection des trous et bumps
-3. ✅ Curriculum learning automatique
-4. ✅ Entraînement parallèle efficace
-5. ✅ Sauvegarde/reprise stable
-6. ✅ Visualisation en temps réel
-7. ✅ Contrôle manuel pour tests
+1. Robot navigue dans un corridor avec vision CNN
+2. Détection des trous et bumps
+3. Curriculum learning automatique
+4. Entraînement parallèle efficace
+5. Sauvegarde/reprise stable
+6. Visualisation en temps réel
+7. Contrôle manuel pour tests
 
 ---
 
-## 📈 Résultats Attendus
+## Résultats Attendus
 
 - **Phase 1** (100% bumps): ~40m de distance moyenne
 - **Phase 2** (50% bumps): ~60m de distance moyenne
@@ -515,7 +515,7 @@ La progression est **irréversible** - une fois une phase atteinte, on ne régre
 
 ---
 
-## 🔧 Configuration Recommandée
+## Configuration Recommandée
 
 **Pour entraînement rapide:**
 - 30 environnements parallèles
@@ -530,7 +530,7 @@ La progression est **irréversible** - une fois une phase atteinte, on ne régre
 
 ---
 
-## 📞 Support
+## Support
 
 Pour toute question ou problème, vérifier:
 1. Les logs dans `episodes_log.txt`

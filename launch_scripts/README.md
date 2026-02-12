@@ -93,7 +93,7 @@ docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
 
 ---
 
-## 🐧 PARTIE 1 : Lancement via WSL (Recommandé pour GPU)
+## PARTIE 1 : Lancement via WSL (Recommandé pour GPU)
 
 ### Commande de lancement :
 
@@ -111,7 +111,7 @@ cd /mnt/c/Users/VOTRE_USERNAME/Document/appr_renf
 ./start.sh
 ```
 
-### 📁 Dossier partagé :
+### Dossier partagé :
 
 **Linux (WSL)** ↔️ **Docker**
 ```
@@ -131,7 +131,7 @@ cd /mnt/c/Users/VOTRE_USERNAME/Document/appr_renf
 - Meilleure détection GPU
 - Performance optimale pour l'entraînement
 
-### ⚠️ Inconvénients :
+### Inconvénients :
 - Dossier différent du lancement Windows
 - Nécessite d'ouvrir WSL
 
@@ -141,7 +141,7 @@ cd /mnt/c/Users/VOTRE_USERNAME/Document/appr_renf
 
 ---
 
-## 🪟 PARTIE 2 : Lancement direct depuis Windows
+## PARTIE 2 : Lancement direct depuis Windows
 
 ### Commande de lancement :
 
@@ -152,7 +152,7 @@ cd C:\Users\VOTRE_USERNAME\Documents\appr_renf
 .\start.bat
 ```
 
-### 📁 Dossier partagé :
+### Dossier partagé :
 
 **Windows** ↔️ **Docker**
 ```
@@ -176,7 +176,7 @@ C:\Users\VOTRE_USERNAME\rl\mujoco\workspace
 - Dossier Windows natif (facile d'accès)
 - Pas besoin d'ouvrir WSL
 
-### ⚠️ Inconvénients :
+### Inconvénients :
 - GPU CUDA peut ne pas fonctionner (détection moins fiable)
 - Jupyter peut avoir des problèmes de permissions
 - Software rendering pour OpenGL
@@ -187,7 +187,7 @@ C:\Users\VOTRE_USERNAME\rl\mujoco\workspace
 
 ---
 
-## 📊 Comparaison rapide :
+## Comparaison rapide :
 
 | Critère | WSL (start.sh) | Windows (start.bat) |
 |---------|----------------|---------------------|
@@ -281,7 +281,7 @@ Le conteneur s'arrêtera proprement.
 - Entraînement de réseaux de neurones
 - **Fonctionne avec ce setup**
 
-### ⚠️ OpenGL (Affichage 3D)
+### OpenGL (Affichage 3D)
 - Visualisation MuJoCo
 - Software rendering (CPU)
 - Légèrement plus lent mais fonctionnel

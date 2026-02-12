@@ -4,7 +4,7 @@ Entraînement d'un robot à 4 roues pour naviguer dans un corridor avec obstacle
 
 Ce projet utilise Docker avec support GPU NVIDIA pour l'entraînement et MuJoCo pour la simulation physique.
 
-## 📋 Table des matières
+## Table des matières
 
 - [Prérequis](#prérequis)
 - [Installation](#installation)
@@ -15,7 +15,7 @@ Ce projet utilise Docker avec support GPU NVIDIA pour l'entraînement et MuJoCo 
 
 ---
 
-## 🔧 Prérequis (l'un ou l'autre)
+## Prérequis (l'un ou l'autre)
 
 ### Windows
 
@@ -34,7 +34,7 @@ Ce projet utilise Docker avec support GPU NVIDIA pour l'entraînement et MuJoCo 
 
 ---
 
-## 🚀 Installation
+## Installation
 
 ### 1. Cloner le dépôt
 
@@ -134,7 +134,7 @@ docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
 
 ---
 
-## 📁 Structure du projet
+## Structure du projet
 
 ```
 rl/                                    # Dossier racine (créé par les scripts)
@@ -175,7 +175,7 @@ rl/                                    # Dossier racine (créé par les scripts)
 
 ---
 
-## 🐳 Lancement de l'environnement
+## Lancement de l'environnement
 
 Le projet utilise Docker pour fournir un environnement complet avec:
 - MuJoCo Desktop (interface graphique via noVNC)
@@ -282,7 +282,7 @@ Ctrl+C
 
 ---
 
-## ⚡ Utilisation rapide
+## Utilisation rapide
 
 ### Dans l'environnement Docker
 
@@ -321,7 +321,7 @@ Le projet propose deux versions avec des méthodes de contrôle différentes:
 
 ---
 
-## 🔍 Vérifier le support GPU
+## Vérifier le support GPU
 
 Dans Jupyter (http://localhost:8888) ou dans le terminal Docker:
 
@@ -347,7 +347,7 @@ CUDA Version: 12.x
 
 ---
 
-## 📊 Comparaison des méthodes de lancement
+## Comparaison des méthodes de lancement
 
 | Critère | WSL (start.sh) | Windows (start.bat) | Linux (start.sh) |
 |---------|----------------|---------------------|------------------|
@@ -360,7 +360,7 @@ CUDA Version: 12.x
 
 ---
 
-## 🎯 Objectif
+## Objectif
 
 Le robot doit apprendre à naviguer dans un corridor de 100m avec:
 - **Trous** (holes): Zones à éviter (chute = échec)
@@ -374,7 +374,7 @@ Le robot utilise:
 
 ---
 
-## 📊 Métriques d'entraînement
+## Métriques d'entraînement
 
 Les métriques suivantes sont trackées:
 - **Return moyen**: Récompense cumulée par épisode
@@ -385,7 +385,7 @@ Les métriques suivantes sont trackées:
 
 ---
 
-## 🎓 Curriculum Learning
+## Curriculum Learning
 
 L'entraînement utilise un curriculum progressif:
 
@@ -398,7 +398,7 @@ Le passage à la phase suivante se fait automatiquement quand la distance moyenn
 
 ---
 
-## 🛠️ Configuration
+## Configuration
 
 Tous les paramètres sont configurables via `config.yaml` dans chaque dossier (ppo_no_steer, ppo_steer):
 - Hyperparamètres PPO (learning rate, gamma, etc.)
@@ -411,7 +411,7 @@ Voir les READMEs spécifiques pour plus de détails.
 
 ---
 
-## 🐛 Troubleshooting
+## Troubleshooting
 
 ### Docker ne démarre pas
 
@@ -464,7 +464,7 @@ docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
 
 ---
 
-## 📝 Notes importantes
+## Notes importantes
 
 - Le dossier `rl/` est créé automatiquement par les scripts de lancement (va utiliser votre dossier rl cloné)
 - Les checkpoints et métriques sont sauvegardés dans `models/` de chaque projet
@@ -474,7 +474,7 @@ docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
 
 ---
 
-## 📝 Licence
+## Licence
 
 MIT
 

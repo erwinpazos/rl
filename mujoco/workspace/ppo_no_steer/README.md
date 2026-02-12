@@ -4,7 +4,7 @@ Version avec contrôle direct des 4 roues indépendamment (action space: 4 dimen
 
 **Emplacement**: `mujoco/workspace/ppo_no_steer/`
 
-## 📋 Table des matières
+## Table des matières
 
 - [Vue d'ensemble](#vue-densemble)
 - [Scripts disponibles](#scripts-disponibles)
@@ -14,7 +14,7 @@ Version avec contrôle direct des 4 roues indépendamment (action space: 4 dimen
 
 ---
 
-## 🎯 Vue d'ensemble
+## Vue d'ensemble
 
 Cette version contrôle directement les 4 roues du robot:
 - **Action space**: `Box(-1.0, 1.0, (4,))` 
@@ -26,7 +26,7 @@ Cette version contrôle directement les 4 roues du robot:
 
 ---
 
-## 📜 Scripts disponibles
+## Scripts disponibles
 
 ### 1. train_ppo.py - Entraînement
 
@@ -178,36 +178,7 @@ python visualize_corridor_map.py --seed 42 --bump-ratio 0.8
 
 ---
 
-### 4. plot_metrics.py - Graphiques de métriques
-
-Génère des graphiques à partir des métriques d'entraînement.
-
-**Usage:**
-```bash
-python plot_metrics.py [CSV_FILE]
-```
-
-**Arguments:**
-- `CSV_FILE`: Chemin vers le CSV de métriques (défaut: `models/training_metrics.csv`)
-
-**Exemples:**
-```bash
-# Graphiques depuis fichier par défaut
-python plot_metrics.py
-
-# Graphiques depuis fichier spécifique
-python plot_metrics.py models/training_metrics.csv
-```
-
-**Graphiques générés:**
-- Return moyen par global_step
-- Distance moyenne par global_step
-- Taux de succès par global_step
-- Survie moyenne par global_step
-
----
-
-### 5. corridor_env.py - Environnement Gymnasium
+### 4. corridor_env.py - Environnement Gymnasium
 
 Environnement personnalisé pour le robot dans le corridor.
 
@@ -220,7 +191,7 @@ Environnement personnalisé pour le robot dans le corridor.
 
 ---
 
-### 6. corridor_generator_similar.py - Générateur de corridors
+### 5. corridor_generator_similar.py - Générateur de corridors
 
 Génère des corridors aléatoires avec trous et bosses.
 
@@ -232,7 +203,7 @@ Génère des corridors aléatoires avec trous et bosses.
 
 ---
 
-## 🔄 Pipeline d'entraînement complet
+## Pipeline d'entraînement complet
 
 ### Diagramme du pipeline
 
@@ -525,7 +496,7 @@ Génère des corridors aléatoires avec trous et bosses.
 
 ---
 
-## 🧠 Architecture du réseau
+## Architecture du réseau
 
 ### Vue d'ensemble
 
@@ -625,7 +596,7 @@ OBSERVATION (7 + history_dim + grid_dim valeurs)
 
 ---
 
-## ⚙️ Configuration (config.yaml)
+## Configuration (config.yaml)
 
 ### Structure complète
 
@@ -719,9 +690,116 @@ rewards:
   no_progress_penalty: -4.0        # Pénalité no progress
 ```
 
+### Explication des paramètres
+
+#### Section training
+- `total_timesteps`: Nombre total de steps d'entraînement (8M = ~260 itérations avec 30 envs et 1024 steps)
+- `num_envs`: Nombre d'environnements parallèles (plus = plus rapide mais plus de RAM/VRAM)
+- `num_steps`: Steps par rollout avant update PPO (plus = plus stable mais moins d'updates)
+- `num_minibatches`: Division du batch pour l'optimisation (32 = 960 steps par minibatch)
+- `update_epochs`: Nombre de passes sur les données collectées (10 = bon compromis)
+- `seed`: Seed pour reproductibilité (change pour varier l'entraînement)
+
+#### Section ppo
+- `lr`: Learning rate (0.0004 = bon départ, réduire si instable)
+- `gamma`: Discount factor (0.995 = horizon long terme, proche de 1 = plus patient)
+- `gae_lambda`: GAE lambda pour estimation des advantages (0.98 = bon compromis biais/variance)
+- `clip_coef`: PPO clip coefficient (0.2 = standard, limite les changements de policy)
+- `ent_coef`: Entropy coefficient (0.01 = encourage exploration, augmenter si bloqué)
+- `vf_coef`: Value function coefficient (0.5 = poids de la loss du critic)
+- `max_grad_norm`: Gradient clipping (0.5 = évite les explosions de gradients)
+
+#### Section optimizer
+- `eps`: Adam epsilon (1e-5 = stabilité numérique)
+
+#### Section environment
+- `max_steps`: Steps maximum par épisode (7000 = ~70s à 100Hz)
+- `use_random_corridor`: true = génération aléatoire, false = utiliser corridor_xml
+- `corridor_xml`: Fichier XML si use_random_corridor=false
+
+#### Section network
+- `robot_net_hidden`: Couches MLP pour état robot [32] = 7→32
+- `history_net_hidden`: Couches MLP pour historique [64,32] = 48→64→32
+- `cnn_channels`: Canaux CNN [32,64] = 2→32→64
+- `cnn_kernel_size`: Taille kernel convolution (3 = 3×3)
+- `cnn_stride`: Stride convolution (2 = réduit dimensions par 2)
+- `backbone_hidden`: Couches MLP fusion [64] = 128→64
+
+#### Section logging
+- `log_interval`: Afficher logs toutes les N itérations (1 = chaque itération)
+- `save_interval`: Sauvegarder checkpoint tous les N itérations (5 = tous les 5)
+- `render_interval`: Render tous les N itérations (10 = rarement, coûteux)
+- `batch_size_metrics`: Taille batch pour calcul métriques (20 épisodes)
+
+#### Section curriculum
+- `enabled`: Activer curriculum learning (true recommandé)
+- `stabilization_steps`: Steps avant première vérification curriculum (20 itérations)
+- `bump_ratio_schedule`: Liste des phases avec:
+  - `phase`: Numéro de phase (1, 2, 3, 4)
+  - `bump_ratio`: Ratio de bosses (0.5 = 50%, 1.0 = 100%)
+  - `distance_threshold`: Distance moyenne pour passer à la phase suivante (null = phase finale)
+
+#### Section robot
+- `max_steering_angle`: Angle volant maximum en degrés (30° = réaliste pour voiture)
+- `max_speed`: Vitesse maximum en m/s (1.0 = ~3.6 km/h, lent mais stable)
+- `spawn_angle_max`: Angle spawn maximum en degrés (30° = variation initiale)
+
+#### Section vision
+- `cell_size`: Taille d'une cellule de la grille en mètres (0.2 = 20cm)
+- `vision_front`: Distance vision devant en mètres (5 = voir loin devant)
+- `vision_behind`: Distance vision derrière en mètres (2 = contexte arrière)
+- `vision_left`: Distance vision gauche en mètres (2 = détecter murs)
+- `vision_right`: Distance vision droite en mètres (2 = détecter murs)
+
+#### Section history
+- `history_interval`: Sauver position tous les N steps (20 = ~0.2s à 100Hz)
+- `history_length`: Nombre de positions passées (8 = 8 frames × 6 valeurs = 48)
+
+#### Section corridor
+- `corridor_length`: Longueur corridor en mètres (200 = long)
+- `corridor_width`: Largeur corridor en mètres (3 = étroit)
+- `success_distance`: Distance pour succès en mètres (100 = objectif)
+
+#### Section rewards
+- `success_reward`: Récompense succès (50 = grosse récompense)
+- `failure_penalty`: Pénalité échec (-5 = pénalité modérée)
+- `progress_multiplier`: Multiplicateur progression (5.0 = encourage avancer)
+- `collision_penalty`: Pénalité collision par step (-0.01 = petite pénalité continue)
+- `fell_threshold`: Seuil chute en mètres (0.15 = robot tombé si z < 0.15m)
+- `no_progress_check_interval`: Vérifier progrès tous les N steps (750 = ~7.5s)
+- `no_progress_min_distance`: Distance minimum requise en mètres (0.3 = doit avancer)
+- `no_progress_penalty`: Pénalité no progress (-4.0 = pénalité forte)
+
+### Conseils de tuning
+
+**Pour accélérer l'entraînement:**
+- Augmenter `num_envs` (si RAM/VRAM suffisante)
+- Augmenter `num_steps` (plus stable mais moins d'updates)
+- Réduire `update_epochs` (moins de passes sur les données)
+
+**Si l'entraînement est instable:**
+- Réduire `lr` (0.0003 ou 0.0002)
+- Augmenter `ent_coef` (0.02 ou 0.03 pour plus d'exploration)
+- Réduire `num_steps` (updates plus fréquents)
+
+**Si le robot n'explore pas assez:**
+- Augmenter `ent_coef` (0.02 ou plus)
+- Réduire `clip_coef` (0.1 pour plus de changements)
+- Ajuster curriculum (commencer plus facile)
+
+**Si le robot est trop prudent:**
+- Réduire `collision_penalty` (moins pénalisant)
+- Augmenter `progress_multiplier` (encourage vitesse)
+- Augmenter `max_speed` (permet d'aller plus vite)
+
+**Si le robot est trop agressif:**
+- Augmenter `collision_penalty` (plus pénalisant)
+- Réduire `progress_multiplier` (moins pressé)
+- Augmenter `failure_penalty` (plus peur d'échouer)
+
 ---
 
-## 📊 Métriques trackées
+## Métriques trackées
 
 ### Par batch (training_metrics.csv)
 
@@ -752,7 +830,7 @@ Episode 123: fell | Steps: 456 | Distance: 12.34m | Reward: 45.6 | Corridor: hol
 
 ---
 
-## 🎓 Curriculum Learning
+## Curriculum Learning
 
 ### Progression des phases
 
@@ -787,7 +865,7 @@ Sans `--rollback`: continue sans sauvegarder.
 
 ---
 
-## 📁 Fichiers générés
+## Fichiers générés
 
 ```
 models/
@@ -806,7 +884,7 @@ models/
 
 ---
 
-## 🚀 Exemples d'utilisation
+## Exemples d'utilisation
 
 ### Entraînement complet
 
@@ -817,11 +895,6 @@ cd ~/workspace/ppo_no_steer
 # Entraînement standard avec rollback
 python train_ppo.py --rollback
 
-# Surveiller les métriques en temps réel (dans un autre terminal)
-watch -n 5 tail -n 20 models/episodes_log.txt
-
-# Générer graphiques pendant entraînement
-python plot_metrics.py
 ```
 
 ### Test et évaluation
@@ -861,7 +934,7 @@ python visualize_corridor_map.py --seed 42 --bump-ratio 0.8
 
 ---
 
-## 🔍 Troubleshooting
+## Troubleshooting
 
 ### Problème: tkinter non trouvé
 
@@ -888,7 +961,7 @@ training:
 
 ---
 
-## 📝 Notes importantes
+## Notes importantes
 
 - Les checkpoints incluent tout l'état (model, optimizer, iteration, metrics)
 - Le resume est automatique depuis le dernier checkpoint

@@ -162,15 +162,15 @@ echo Checking image availability...
 docker images --format "{{.Repository}}:{{.Tag}}" | findstr /C:"%IMAGE_NAME%" >nul 2>&1
 if not errorlevel 1 (
     echo [OK] Local image found: %IMAGE_NAME%
-    if "%USE_LOCAL_ONLY%"=="false" (
-        echo Checking for updates...
-        docker pull %IMAGE_NAME% >nul 2>&1
-        if not errorlevel 1 (
-            echo [OK] Image updated
-        ) else (
-            echo [INFO] Using local image
-        )
-    )
+    @REM if "%USE_LOCAL_ONLY%"=="false" (
+    @REM     echo Checking for updates...
+    @REM     docker pull %IMAGE_NAME% >nul 2>&1
+    @REM     if not errorlevel 1 (
+    @REM         echo [OK] Image updated
+    @REM     ) else (
+    @REM         echo [INFO] Using local image
+    @REM     )
+    @REM )
 ) else (
     if "%USE_LOCAL_ONLY%"=="true" (
         echo [ERROR] No local image found and --local flag prevents pulling
