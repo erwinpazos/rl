@@ -649,8 +649,14 @@ def debug_render_episode(agent, debug_env, device, max_steps=None, current_bump_
 
 
 
-def train(config_path="config.yaml", **kwargs):
-    """Entraînement PPO optimisé avec configuration JSON."""
+def train(config_path="config.yaml", rollback=False, **kwargs):
+    """Entraînement PPO optimisé avec configuration JSON.
+    
+    Args:
+        config_path: Chemin vers le fichier de configuration
+        rollback: Si True, rollback au dernier checkpoint si la performance régresse
+        **kwargs: Paramètres supplémentaires pour override
+    """
     
     # Charger configuration
     config = load_config(config_path)
@@ -1334,9 +1340,13 @@ def train(config_path="config.yaml", **kwargs):
                 if temp_metrics:
                     print(f"BATCHES: {len(temp_metrics)} batches of {batch_size_metrics} episodes in temp")
                 
-                print(f"REWARD  : Iteration {np.mean(iter_returns):>7.1f} +/- {np.std(iter_returns):>5.1f} | Best {best_return:>7.1f}")
-                print(f"DISTANCE: Iteration {np.mean(iter_distances):>7.1f}m +/- {np.std(iter_distances):>5.1f}m | Best {best_distance:>7.1f}m")
-                print(f"SURVIVAL: Iteration {np.mean(iter_steps):>7.0f} steps +/- {np.std(iter_steps):>5.0f}")
+                # Calculer min/max de l'itération
+                iter_best_return = np.max(iter_returns)
+                iter_best_distance = np.max(iter_distances)
+                
+                print(f"REWARD  : Mean {np.mean(iter_returns):>7.1f} +/- {np.std(iter_returns):>5.1f} | Max {iter_best_return:>7.1f}")
+                print(f"DISTANCE: Mean {np.mean(iter_distances):>7.1f}m +/- {np.std(iter_distances):>5.1f}m | Max {iter_best_distance:>7.1f}m")
+                print(f"SURVIVAL: Mean {np.mean(iter_steps):>7.0f} steps +/- {np.std(iter_steps):>5.0f}")
                 
                 # Récapitulatif terminaisons (seulement si > 0)
                 active_reasons = {k: v for k, v in iter_terminations.items() if v > 0}
@@ -1369,9 +1379,39 @@ def train(config_path="config.yaml", **kwargs):
             
             if not should_save:
                 print(f"\nREJECTED: Current distance ({current_distance:.2f}m) < Last saved ({last_distance:.2f}m)")
-                # print(f"Stopping training...")
-                # print(f"{'='*70}\n")
-                # break
+                
+                if rollback:
+                    print(f"ROLLBACK: Loading last checkpoint and clearing temp data...")
+                    
+                    # Charger le dernier checkpoint
+                    last_checkpoint = find_latest_checkpoint("models")
+                    if last_checkpoint:
+                        loaded = load_checkpoint(last_checkpoint, agent, optimizer, device)
+                        if loaded:
+                            # Restaurer les variables d'état
+                            iteration = loaded['iteration']
+                            global_step = loaded['global_step']
+                            total_episodes = loaded.get('last_episode', 0)
+                            
+                            # Nettoyer les temp files (données rejetées)
+                            clear_temp_metrics()
+                            if os.path.exists("models/temp_episodes_log.txt"):
+                                with open("models/temp_episodes_log.txt", 'w') as f:
+                                    pass
+                            
+                            # Recharger last_batch_num
+                            last_batch_num = get_last_batch_num()
+                            
+                            print(f"ROLLBACK: Restored to iteration {iteration}, continuing training...")
+                            print(f"{'='*70}\n")
+                            continue
+                    else:
+                        print(f"WARNING: No checkpoint found for rollback, continuing anyway...")
+                else:
+                    print(f"INFO: Rollback disabled, continuing training...")
+                
+                print(f"{'='*70}\n")
+                continue
             
             print(f"\nACCEPTED: Saving checkpoint...")
             
@@ -1462,6 +1502,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, help="Override learning rate")
     parser.add_argument("--seed", type=int, help="Override seed")
     parser.add_argument("--fresh-start", action="store_true", help="Forcer un nouveau démarrage (ignorer modèles existants)")
+    parser.add_argument("--rollback", action="store_true", help="Activer le rollback automatique si la performance régresse")
     args = parser.parse_args()
     
     # Préparer les kwargs pour override
@@ -1480,4 +1521,4 @@ if __name__ == "__main__":
     # Rendre args accessible globalement pour fresh_start
     globals()['args'] = args
     
-    train(config_path=args.config, **kwargs)
+    train(config_path=args.config, rollback=args.rollback, **kwargs)

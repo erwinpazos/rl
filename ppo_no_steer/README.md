@@ -1,545 +1,880 @@
-# PPO No Steer - Robot Navigation avec Contrôle Direct des Roues
+# PPO No Steer - Contrôle 4 roues indépendantes
 
-Entraînement PPO pour un robot 4 roues naviguant dans un corridor avec obstacles (bumps) et trous, utilisant une vision CNN ego-centrique.
+Version avec contrôle direct des 4 roues indépendamment (action space: 4 dimensions).
 
-**DIFFÉRENCE AVEC ppo_final**: Contrôle DIRECT des 4 roues indépendantes au lieu d'un volant (steering + speed).
+## 📋 Table des matières
+
+- [Vue d'ensemble](#vue-densemble)
+- [Scripts disponibles](#scripts-disponibles)
+- [Pipeline d'entraînement](#pipeline-dentraînement)
+- [Architecture du réseau](#architecture-du-réseau)
+- [Configuration](#configuration)
 
 ---
 
-## 🔧 Prérequis
+## 🎯 Vue d'ensemble
 
-### Installation système (Ubuntu/Debian)
+Cette version contrôle directement les 4 roues du robot:
+- **Action space**: `Box(-1.0, 1.0, (4,))` 
+- **Actions**: `[wheel_FL, wheel_FR, wheel_RL, wheel_RR]`
+- Chaque valeur représente la vitesse de la roue correspondante
+- Plus de liberté mais plus difficile à apprendre
 
-Pour la visualisation CNN avec tkinter:
+---
+
+## 📜 Scripts disponibles
+
+### 1. train_ppo.py - Entraînement
+
+Script principal d'entraînement avec PPO.
+
+**Usage:**
+```bash
+python train_ppo.py [OPTIONS]
+```
+
+**Arguments:**
+- `--config PATH`: Fichier de configuration YAML (défaut: `config.yaml`)
+- `--timesteps N`: Override total timesteps (défaut: 8,000,000)
+- `--num-envs N`: Override nombre d'environnements parallèles (défaut: 30)
+- `--num-steps N`: Override steps par rollout (défaut: 1024)
+- `--lr FLOAT`: Override learning rate (défaut: 0.0004)
+- `--seed N`: Override seed pour reproductibilité (défaut: 1)
+- `--fresh-start`: Forcer nouveau démarrage (ignorer checkpoints existants)
+- `--rollback`: Activer rollback automatique si performance régresse
+
+**Exemples:**
+```bash
+# Entraînement standard
+python train_ppo.py
+
+# Entraînement avec rollback activé
+python train_ppo.py --rollback
+
+# Nouveau démarrage avec 16 environnements
+python train_ppo.py --fresh-start --num-envs 16
+
+# Override learning rate et seed
+python train_ppo.py --lr 0.0003 --seed 42
+```
+
+**Fonctionnalités:**
+- Entraînement parallèle avec AsyncVectorEnv
+- Sauvegarde automatique tous les N itérations
+- Curriculum learning progressif (4 phases)
+- Rollback automatique en cas de régression (avec `--rollback`)
+- Génération de graphiques de métriques
+- Logs détaillés par itération et par épisode
+- Resume automatique depuis dernier checkpoint
+
+**Fichiers générés:**
+- `models/ppo_corridor_{iteration}.pth`: Checkpoints sauvegardés
+- `models/training_metrics.csv`: Métriques d'entraînement
+- `models/training_curves_{iteration}.png`: Graphiques par itération
+- `models/training_curves.png`: Graphique final
+- `models/episodes_log.txt`: Log détaillé de tous les épisodes
+- `models/iteration_summary.json`: Résumé de la dernière itération sauvegardée
+
+---
+
+### 2. test_ppo.py - Test d'un modèle
+
+Teste un modèle entraîné sur N épisodes.
+
+**Usage:**
+```bash
+python test_ppo.py [OPTIONS]
+```
+
+**Arguments:**
+- `--model PATH`: Chemin vers le checkpoint (défaut: dernier checkpoint trouvé)
+- `--config PATH`: Fichier de configuration YAML (défaut: `config.yaml`)
+- `--num-episodes N`: Nombre d'épisodes à tester (défaut: 10)
+- `--render`: Afficher le rendu 3D MuJoCo
+- `--show-vision`: Afficher la vision CNN en temps réel
+- `--corridor PATH`: Utiliser un corridor spécifique (XML)
+- `--bump-ratio FLOAT`: Ratio de bosses (0.0 à 1.0, défaut: depuis config)
+
+**Exemples:**
+```bash
+# Test simple (10 épisodes, pas de rendu)
+python test_ppo.py
+
+# Test avec rendu 3D et vision CNN
+python test_ppo.py --render --show-vision --num-episodes 5
+
+# Test sur corridor spécifique
+python test_ppo.py --render --corridor corridor_yguel.xml
+
+# Test avec 100% de bosses
+python test_ppo.py --render --bump-ratio 1.0 --num-episodes 3
+
+# Test d'un checkpoint spécifique
+python test_ppo.py --model models/ppo_corridor_50.pth --render
+```
+
+**Affichage:**
+- Statistiques par épisode (reward, distance, raison de terminaison)
+- Résumé final (moyenne ± std, meilleure distance)
+- Vision CNN en temps réel (si `--show-vision`)
+- Rendu 3D MuJoCo (si `--render`)
+
+---
+
+### 3. visualize_corridor_map.py - Visualisation CNN
+
+Visualise exactement ce que le CNN reçoit en entrée (grille 2 canaux).
+
+**Usage:**
+```bash
+python visualize_corridor_map.py [OPTIONS]
+```
+
+**Arguments:**
+- `--corridor PATH`: Fichier XML du corridor (défaut: génération aléatoire)
+- `--x FLOAT`: Position X du robot (défaut: aléatoire)
+- `--y FLOAT`: Position Y du robot (défaut: aléatoire)
+- `--angle FLOAT`: Angle du robot en degrés (défaut: aléatoire)
+- `--seed N`: Seed pour génération aléatoire
+- `--bump-ratio FLOAT`: Ratio de bosses (0.0 à 1.0, défaut: 0.5)
+- `--render`: Ouvrir rendu 3D MuJoCo après visualisation
+
+**Exemples:**
+```bash
+# Visualisation avec corridor aléatoire
+python visualize_corridor_map.py
+
+# Visualisation d'un corridor spécifique
+python visualize_corridor_map.py --corridor corridor_yguel.xml
+
+# Position spécifique du robot
+python visualize_corridor_map.py --x 50.0 --y 0.5 --angle 15
+
+# Avec rendu 3D
+python visualize_corridor_map.py --render
+
+# Corridor aléatoire avec seed fixe
+python visualize_corridor_map.py --seed 42 --bump-ratio 0.8
+```
+
+**Affichage:**
+- État du robot (position, vitesse, angle)
+- Historique simplifié (8 frames × 6 valeurs)
+- Canal 0: Obstacles (bumps + murs latéraux)
+- Canal 1: Trous (holes + extérieur)
+- Vue combinée (rouge=obstacle, bleu=trou, blanc=sol)
+- Statistiques des canaux
+
+---
+
+### 4. plot_metrics.py - Graphiques de métriques
+
+Génère des graphiques à partir des métriques d'entraînement.
+
+**Usage:**
+```bash
+python plot_metrics.py [CSV_FILE]
+```
+
+**Arguments:**
+- `CSV_FILE`: Chemin vers le CSV de métriques (défaut: `models/training_metrics.csv`)
+
+**Exemples:**
+```bash
+# Graphiques depuis fichier par défaut
+python plot_metrics.py
+
+# Graphiques depuis fichier spécifique
+python plot_metrics.py models/training_metrics.csv
+```
+
+**Graphiques générés:**
+- Return moyen par global_step
+- Distance moyenne par global_step
+- Taux de succès par global_step
+- Survie moyenne par global_step
+
+---
+
+### 5. corridor_env.py - Environnement Gymnasium
+
+Environnement personnalisé pour le robot dans le corridor.
+
+**Caractéristiques:**
+- Compatible Gymnasium (gym.Env)
+- Observation: état robot + historique + grille CNN (2 canaux)
+- Action: 4 vitesses de roues `[-1, 1]`
+- Récompenses: progression, collision, succès/échec
+- Terminaison: fell, flipped, no_progress, success
+
+---
+
+### 6. corridor_generator_similar.py - Générateur de corridors
+
+Génère des corridors aléatoires avec trous et bosses.
+
+**Fonctionnalités:**
+- Génération procédurale avec seed
+- Contrôle du ratio de bosses (bump_ratio)
+- Toujours 100% de trous + X% de bosses
+- Sauvegarde en XML MuJoCo
+
+---
+
+## 🔄 Pipeline d'entraînement complet
+
+### Diagramme du pipeline
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         INITIALISATION                          │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │ load_config()    │ ← config.yaml
+                    │ Charge YAML      │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │ Créer Agent      │ ← Architecture CNN+MLP
+                    │ + Optimizer      │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │ find_latest_     │
+                    │ checkpoint()     │
+                    └────────┬─────────┘
+                             │
+                    ┌────────┴────────┐
+                    │                 │
+                    ▼                 ▼
+            ┌──────────────┐   ┌──────────────┐
+            │ Checkpoint   │   │ Pas de       │
+            │ trouvé       │   │ checkpoint   │
+            └──────┬───────┘   └──────┬───────┘
+                   │                  │
+                   ▼                  ▼
+         ┌──────────────────┐  ┌──────────────┐
+         │ load_checkpoint()│  │ Démarrage    │
+         │ Restaurer état   │  │ from scratch │
+         └──────┬───────────┘  └──────┬───────┘
+                │                     │
+                └──────────┬──────────┘
+                           │
+                           ▼
+         ┌─────────────────────────────────┐
+         │ Créer environnements parallèles │
+         │ AsyncVectorEnv (30 envs)        │
+         └─────────────┬───────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                      BOUCLE D'ENTRAÎNEMENT                       │
+│                    (260 itérations × 30,720 steps)               │
+└──────────────────────────────────────────────────────────────────┘
+
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ DÉBUT ITÉRATION             │
+         │ iteration_tracker.reset()   │ ← Reset stats itération
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ get_curriculum_state()      │ ← Déterminer phase actuelle
+         │ - Phase (1-4)               │
+         │ - bump_ratio (0.5 → 1.0)    │
+         │ - max_steps (curriculum)    │
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ COLLECTE ROLLOUT            │
+         │ (30 envs × 1024 steps)      │
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ Pour chaque step:           │
+         │ 1. agent.get_action(obs)    │ ← Forward pass
+         │ 2. envs.step(actions)       │ ← Simulation parallèle
+         │ 3. Stocker (obs, action,    │
+         │    reward, done, value)     │
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ Si épisode terminé:         │
+         │ 1. iteration_tracker.add()  │ ← Stats itération
+         │ 2. save_episode_to_temp()   │ ← Log épisode
+         │ 3. Incrémenter episode_num  │
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ CALCUL ADVANTAGES           │
+         │ compute_gae()               │ ← GAE (λ=0.98, γ=0.995)
+         │ - Advantages                │
+         │ - Returns                   │
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ UPDATE PPO                  │
+         │ (10 epochs × 32 minibatches)│
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ Pour chaque epoch:          │
+         │ 1. Shuffle indices          │
+         │ 2. Pour chaque minibatch:   │
+         │    - Forward pass           │
+         │    - Compute losses         │
+         │    - Backward + optimize    │
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ MÉTRIQUES BATCH             │
+         │ compute_batch_metrics()     │
+         │ - mean_return               │
+         │ - mean_distance             │
+         │ - mean_survival             │
+         │ - success_rate              │
+         │ - termination_counts        │
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ save_temp_batch_to_csv()    │ ← Sauver dans temp CSV
+         │ + curriculum fields         │
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ AFFICHAGE LOGS ITÉRATION    │
+         │ - Stats itération courante  │
+         │ - Curriculum phase          │
+         │ - Termination counts        │
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ iteration % save_interval?  │
+         └─────────────┬───────────────┘
+                       │
+              ┌────────┴────────┐
+              │                 │
+              ▼                 ▼
+         ┌─────────┐      ┌─────────┐
+         │   OUI   │      │   NON   │
+         └────┬────┘      └────┬────┘
+              │                │
+              ▼                │
+┌──────────────────────────┐  │
+│   SAVE CHECK             │  │
+└──────────────────────────┘  │
+              │                │
+              ▼                │
+┌──────────────────────────┐  │
+│ get_mean_distance_       │  │
+│ from_temp()              │  │ ← Distance moyenne itération
+└──────────┬───────────────┘  │
+           │                  │
+           ▼                  │
+┌──────────────────────────┐  │
+│ load_last_iteration_     │  │
+│ summary()                │  │ ← Distance dernière sauvegarde
+└──────────┬───────────────┘  │
+           │                  │
+           ▼                  │
+┌──────────────────────────┐  │
+│ current >= last?         │  │
+└──────────┬───────────────┘  │
+           │                  │
+    ┌──────┴──────┐           │
+    │             │           │
+    ▼             ▼           │
+┌────────┐   ┌────────┐      │
+│ ACCEPT │   │ REJECT │      │
+└───┬────┘   └───┬────┘      │
+    │            │           │
+    │            ▼           │
+    │   ┌────────────────┐  │
+    │   │ --rollback?    │  │
+    │   └────┬───────────┘  │
+    │        │              │
+    │   ┌────┴────┐         │
+    │   │         │         │
+    │   ▼         ▼         │
+    │ ┌───┐   ┌───────┐    │
+    │ │OUI│   │  NON  │    │
+    │ └─┬─┘   └───┬───┘    │
+    │   │         │         │
+    │   ▼         ▼         │
+    │ ┌──────┐ ┌──────┐    │
+    │ │Load  │ │Skip  │    │
+    │ │last  │ │save  │    │
+    │ │ckpt  │ │      │    │
+    │ └──┬───┘ └──┬───┘    │
+    │    │        │         │
+    │    └────┬───┘         │
+    │         │             │
+    ▼         ▼             │
+┌──────────────────────┐   │
+│ SAUVEGARDE           │   │
+└──────────────────────┘   │
+    │                      │
+    ▼                      │
+┌──────────────────────┐   │
+│ save_iteration_      │   │
+│ summary()            │   │ ← JSON avec distance
+└──────┬───────────────┘   │
+       │                   │
+       ▼                   │
+┌──────────────────────┐   │
+│ flush_temp_to_main_  │   │
+│ metrics()            │   │ ← Append temp → main CSV
+└──────┬───────────────┘   │
+       │                   │
+       ▼                   │
+┌──────────────────────┐   │
+│ flush_temp_episode_  │   │
+│ logs()               │   │ ← Append temp → main log
+└──────┬───────────────┘   │
+       │                   │
+       ▼                   │
+┌──────────────────────┐   │
+│ get_last_batch_num() │   │ ← Recharger batch_num
+└──────┬───────────────┘   │
+       │                   │
+       ▼                   │
+┌──────────────────────┐   │
+│ plot_training_       │   │
+│ curves(iteration)    │   │ ← Graphique PNG
+└──────┬───────────────┘   │
+       │                   │
+       ▼                   │
+┌──────────────────────┐   │
+│ save_checkpoint()    │   │ ← .pth avec état complet
+│ - model_state_dict   │   │
+│ - optimizer_state    │   │
+│ - iteration          │   │
+│ - global_step        │   │
+│ - total_episodes     │   │
+│ - metrics            │   │
+│ - curriculum_state   │   │
+└──────┬───────────────┘   │
+       │                   │
+       └───────────┬───────┘
+                   │
+                   ▼
+         ┌─────────────────┐
+         │ iteration += 1  │
+         └────────┬────────┘
+                  │
+                  ▼
+         ┌─────────────────┐
+         │ iteration <     │
+         │ total_iters?    │
+         └────────┬────────┘
+                  │
+         ┌────────┴────────┐
+         │                 │
+         ▼                 ▼
+    ┌────────┐        ┌────────┐
+    │  OUI   │        │  NON   │
+    │ (loop) │        │ (fin)  │
+    └────┬───┘        └────┬───┘
+         │                 │
+         └────────┬────────┘
+                  │
+                  ▼
+┌──────────────────────────────────────┐
+│           FIN ENTRAÎNEMENT           │
+└──────────────────────────────────────┘
+                  │
+                  ▼
+         ┌─────────────────┐
+         │ plot_training_  │
+         │ curves()        │ ← Graphique final
+         └────────┬────────┘
+                  │
+                  ▼
+         ┌─────────────────┐
+         │ Afficher stats  │
+         │ finales         │
+         └─────────────────┘
+```
+
+---
+
+## 🧠 Architecture du réseau
+
+### Vue d'ensemble
+
+```
+OBSERVATION (7 + history_dim + grid_dim valeurs)
+    │
+    ├─────────────────┬─────────────────┬─────────────────┐
+    │                 │                 │                 │
+    ▼                 ▼                 ▼                 ▼
+┌─────────┐    ┌──────────┐    ┌──────────┐    ┌──────────────┐
+│ Robot   │    │ History  │    │ Grid     │    │ Grid         │
+│ State   │    │ (48 val) │    │ Canal 0  │    │ Canal 1      │
+│ (7 val) │    │          │    │(obstacles│    │ (trous)      │
+└────┬────┘    └─────┬────┘    └─────┬────┘    └──────┬───────┘
+     │               │               │                 │
+     ▼               ▼               └────────┬────────┘
+┌─────────┐    ┌──────────┐                  │
+│ MLP     │    │ MLP      │                  ▼
+│ 7→32    │    │ 48→64→32 │         ┌─────────────────┐
+└────┬────┘    └─────┬────┘         │ CNN 2 canaux    │
+     │               │              │ Conv 2→32       │
+     │               │              │ Conv 32→64      │
+     │               │              │ Flatten         │
+     │               │              │ Linear→64       │
+     │               │              └────────┬────────┘
+     │               │                       │
+     └───────┬───────┴───────────────────────┘
+             │
+             ▼
+    ┌─────────────────┐
+    │ Concatenate     │
+    │ (32+32+64=128)  │
+    └────────┬────────┘
+             │
+             ▼
+    ┌─────────────────┐
+    │ Backbone MLP    │
+    │ 128→64          │
+    └────────┬────────┘
+             │
+             ├─────────────────┬─────────────────┐
+             │                 │                 │
+             ▼                 ▼                 ▼
+    ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
+    │ Actor Mean  │   │ Actor LogStd│   │ Critic      │
+    │ 64→4        │   │ (learnable) │   │ 64→1        │
+    └──────┬──────┘   └──────┬──────┘   └──────┬──────┘
+           │                 │                  │
+           └────────┬────────┘                  │
+                    │                           │
+                    ▼                           ▼
+           ┌─────────────────┐         ┌─────────────┐
+           │ Normal(μ, σ)    │         │ Value       │
+           │ Sample action   │         │ Estimate    │
+           └─────────────────┘         └─────────────┘
+```
+
+### Détails des composants
+
+**1. Robot State MLP (7 → 32)**
+- Input: `[x, y, z, vx, vy, vz, theta]`
+- Architecture: `Linear(7, 32) + Tanh`
+- Rôle: Encoder l'état instantané du robot
+
+**2. History MLP (48 → 64 → 32)**
+- Input: 8 frames × 6 valeurs (positions + vitesses relatives)
+- Architecture: `Linear(48, 64) + Tanh + Linear(64, 32) + Tanh`
+- Rôle: Encoder l'historique pour anticipation
+
+**3. CNN (2 canaux → 64)**
+- Input: Grille `[2, grid_rows, grid_cols]`
+  - Canal 0: Obstacles (bumps + murs)
+  - Canal 1: Trous (holes + extérieur)
+- Architecture:
+  ```
+  Conv2d(2, 32, kernel=3, stride=2, padding=1) + ReLU
+  Conv2d(32, 64, kernel=3, stride=2, padding=1) + ReLU
+  Flatten
+  Linear(64 × conv_rows × conv_cols, 64) + Tanh
+  ```
+- Rôle: Extraire features spatiales de la vision
+
+**4. Backbone (128 → 64)**
+- Input: Concatenation des 3 encoders (32 + 32 + 64 = 128)
+- Architecture: `Linear(128, 64) + Tanh`
+- Rôle: Fusion des informations
+
+**5. Actor Head (64 → 4)**
+- Mean: `Linear(64, 4)` (init std=0.01)
+- LogStd: `Parameter(zeros(1, 4))` (learnable)
+- Distribution: `Normal(mean, exp(logstd))`
+- Output: 4 actions continues `[-1, 1]` pour les 4 roues
+
+**6. Critic Head (64 → 1)**
+- Architecture: `Linear(64, 1)` (init std=1.0)
+- Output: Estimation de la valeur de l'état
+
+---
+
+## ⚙️ Configuration (config.yaml)
+
+### Structure complète
+
+```yaml
+training:
+  total_timesteps: 8000000  # Total steps d'entraînement
+  num_envs: 30             # Environnements parallèles
+  num_steps: 1024          # Steps par rollout
+  num_minibatches: 32      # Minibatches pour update
+  update_epochs: 10        # Époques d'optimisation
+  seed: 1                  # Seed reproductibilité
+
+ppo:
+  lr: 0.0004              # Learning rate
+  gamma: 0.995            # Discount factor
+  gae_lambda: 0.98        # GAE lambda
+  clip_coef: 0.2          # PPO clip coefficient
+  ent_coef: 0.01          # Entropy coefficient
+  vf_coef: 0.5            # Value function coefficient
+  max_grad_norm: 0.5      # Gradient clipping
+
+optimizer:
+  eps: 0.00001            # Adam epsilon
+
+environment:
+  max_steps: 7000                    # Steps max par épisode
+  use_random_corridor: true          # Corridors aléatoires
+  corridor_xml: "corridor_yguel.xml" # Si use_random=false
+
+network:
+  robot_net_hidden: [32]           # MLP robot: 7→32
+  history_net_hidden: [64, 32]     # MLP history: 48→64→32
+  cnn_channels: [32, 64]           # CNN: 2→32→64
+  cnn_kernel_size: 3               # Kernel 3×3
+  cnn_stride: 2                    # Stride 2
+  backbone_hidden: [64]            # Backbone: 128→64
+
+logging:
+  log_interval: 1          # Log toutes les N itérations
+  save_interval: 5         # Save tous les N itérations
+  render_interval: 10      # Render tous les N itérations
+  batch_size_metrics: 20   # Taille batch pour métriques
+
+curriculum:
+  enabled: true            # Activer curriculum
+  stabilization_steps: 20  # Steps stabilisation début
+  
+  bump_ratio_schedule:
+    - phase: 1
+      bump_ratio: 0.5
+      distance_threshold: 10
+    - phase: 2
+      bump_ratio: 0.65
+      distance_threshold: 12
+    - phase: 3
+      bump_ratio: 0.75
+      distance_threshold: 65
+    - phase: 4
+      bump_ratio: 1.0
+      distance_threshold: null
+
+robot:
+  max_steering_angle: 30.0  # Angle volant max (°)
+  max_speed: 1.0           # Vitesse max (m/s)
+  spawn_angle_max: 30.0    # Angle spawn max (°)
+
+vision:
+  cell_size: 0.2           # Taille cellule (m)
+  vision_front: 5          # Vision devant (m)
+  vision_behind: 2         # Vision derrière (m)
+  vision_left: 2           # Vision gauche (m)
+  vision_right: 2          # Vision droite (m)
+
+history:
+  history_interval: 20     # Sauver position tous les N steps
+  history_length: 8        # Nombre positions passées
+
+corridor:
+  corridor_length: 200.0   # Longueur corridor (m)
+  corridor_width: 3.0      # Largeur corridor (m)
+  success_distance: 100.0  # Distance succès (m)
+
+rewards:
+  success_reward: 50.0      # Récompense succès
+  failure_penalty: -5.0     # Pénalité échec
+  progress_multiplier: 5.0  # Multiplicateur progression
+  collision_penalty: -0.01  # Pénalité collision
+  fell_threshold: 0.15      # Seuil chute (m)
+  no_progress_check_interval: 750  # Check progrès (steps)
+  no_progress_min_distance: 0.3    # Distance min (m)
+  no_progress_penalty: -4.0        # Pénalité no progress
+```
+
+---
+
+## 📊 Métriques trackées
+
+### Par batch (training_metrics.csv)
+
+- `batch_num`: Numéro du batch
+- `episode_end`: Dernier épisode du batch
+- `episodes_range`: Range d'épisodes (ex: "1-20")
+- `global_step`: Steps totaux depuis début
+- `mean_return`: Return moyen du batch
+- `mean_distance`: Distance moyenne du batch
+- `mean_survival`: Survie moyenne du batch
+- `success_rate`: Taux de succès du batch
+- `current_phase`: Phase curriculum actuelle
+- `random_percentage`: % corridors aléatoires (fixe à 1.0)
+- `bump_ratio`: Ratio de bosses actuel
+
+### Par itération (logs console)
+
+- Return: Recent (mean ± std) | Max
+- Distance: Recent (mean ± std) | Max
+- Survival: Recent (mean ± std)
+- Terminations: fell, flipped, no_progress counts
+
+### Par épisode (episodes_log.txt)
+
+```
+Episode 123: fell | Steps: 456 | Distance: 12.34m | Reward: 45.6 | Corridor: holes+50%bumps+random | Seed: 7890
+```
+
+---
+
+## 🎓 Curriculum Learning
+
+### Progression des phases
+
+```
+Phase 1: holes + 50% bumps
+  ↓ (distance >= 10m)
+Phase 2: holes + 65% bumps
+  ↓ (distance >= 12m)
+Phase 3: holes + 75% bumps
+  ↓ (distance >= 65m)
+Phase 4: holes + 100% bumps
+  (pas de seuil, phase finale)
+```
+
+### Vérification à chaque itération
+
+```
+CURRICULUM CHECK
+Iteration mean distance: 11.5m
+Current phase: 1 (threshold: 10.0m)
+✓ Distance >= threshold → Ready for next phase
+```
+
+### Rollback automatique (--rollback)
+
+Si la performance régresse (distance < dernière sauvegarde):
+1. Charger le dernier checkpoint
+2. Nettoyer les fichiers temp
+3. Continuer l'entraînement
+
+Sans `--rollback`: continue sans sauvegarder.
+
+---
+
+## 📁 Fichiers générés
+
+```
+models/
+├── ppo_corridor_5.pth          # Checkpoint itération 5
+├── ppo_corridor_10.pth         # Checkpoint itération 10
+├── ...
+├── training_metrics.csv        # Métriques complètes
+├── training_curves_5.png       # Graphiques itération 5
+├── training_curves_10.png      # Graphiques itération 10
+├── training_curves.png         # Graphiques finaux
+├── episodes_log.txt            # Log tous épisodes
+├── iteration_summary.json      # Dernière itération sauvegardée
+├── temp_training_metrics.csv   # Métriques temporaires (flush)
+└── temp_episodes_log.txt       # Logs temporaires (flush)
+```
+
+---
+
+## 🚀 Exemples d'utilisation
+
+### Entraînement complet
+
+```bash
+# Entraînement standard avec rollback
+python train_ppo.py --rollback
+
+# Surveiller les métriques en temps réel
+watch -n 5 tail -n 20 models/episodes_log.txt
+
+# Générer graphiques pendant entraînement
+python plot_metrics.py
+```
+
+### Test et évaluation
+
+```bash
+# Test rapide sans rendu
+python test_ppo.py --num-episodes 20
+
+# Test avec visualisation complète
+python test_ppo.py --render --show-vision --num-episodes 5
+
+# Test sur corridor difficile
+python test_ppo.py --render --bump-ratio 1.0 --num-episodes 10
+
+# Test checkpoint spécifique
+python test_ppo.py --model models/ppo_corridor_50.pth --render
+```
+
+### Visualisation et debug
+
+```bash
+# Visualiser vision CNN
+python visualize_corridor_map.py --render
+
+# Position spécifique
+python visualize_corridor_map.py --x 50 --y 0.5 --angle 15
+
+# Corridor avec seed fixe
+python visualize_corridor_map.py --seed 42 --bump-ratio 0.8
+```
+
+---
+
+## 🔍 Troubleshooting
+
+### Problème: tkinter non trouvé
+
 ```bash
 sudo apt update
 sudo apt install python3-tk python3-pil.imagetk
+pip install pillow
 ```
 
-### Packages Python
+### Problème: CUDA out of memory
 
-```bash
-pip install numpy torch gymnasium mujoco pyyaml matplotlib pillow python3-pil.imagetk
+Réduire `num_envs` dans config.yaml:
+```yaml
+training:
+  num_envs: 16  # Au lieu de 30
 ```
 
-**Note**: 
-- tkinter est inclus avec Python mais nécessite `python3-tk` au niveau système
-- ImageTk nécessite `python3-pil.imagetk` pour la visualisation CNN
+### Problème: Entraînement ne progresse pas
+
+1. Vérifier curriculum: phase trop difficile?
+2. Réduire learning rate: `--lr 0.0002`
+3. Augmenter entropy: `ent_coef: 0.02` dans config
+4. Utiliser `--fresh-start` pour recommencer
 
 ---
 
-## 📁 Structure du Projet
+## 📝 Notes importantes
 
-### 🔧 Fichiers de Configuration
-
-#### `config.yaml`
-Configuration centrale du projet. Contient tous les hyperparamètres:
-- **PPO**: learning rate, gamma, GAE lambda, epochs, clip epsilon
-- **Training**: nombre d'environnements parallèles, steps par rollout, batch sizes
-- **Network**: architecture CNN et MLP (couches, tailles)
-- **Vision**: dimensions de la grille, cell_size, distances de vision
-- **Robot**: paramètres de contrôle (spawn angle) - PAS de steering/speed car contrôle direct des roues
-- **Corridor**: longueur, largeur, distance de succès
-- **Rewards**: récompenses/pénalités pour succès, échec, progression, collision, no-progress
-- **Curriculum**: progression automatique basée sur la distance moyenne
-  - `random_corridor_schedule`: % de corridors aléatoires vs fixes
-  - `bump_ratio_schedule`: ratio de bumps ajoutés aux trous par phase
+- Les checkpoints incluent tout l'état (model, optimizer, iteration, metrics)
+- Le resume est automatique depuis le dernier checkpoint
+- Les fichiers temp sont flushés à chaque sauvegarde
+- Le batch numbering continue après flush
+- Les stats d'itération sont reset à chaque itération
+- Le curriculum progresse automatiquement selon la distance moyenne
 
 ---
-
-### 🤖 Environnement
-
-#### `corridor_env.py`
-Environnement Gymnasium pour le robot dans le corridor.
-
-**CONTRÔLE**: 4 actions continues (vitesses angulaires des roues) au lieu de 2 (steering + speed)
-
-**Caractéristiques:**
-- **Observation**: 
-  - État robot: position (x,y,z), vitesse (vx,vy,vz), angle (θ)
-  - Historique: 8 frames de vitesses passées (48 valeurs)
-  - Grille CNN: 35×20×2 canaux (obstacles, trous) - vision ego-centrique
-- **Action**: 
-  - `steering_angle`: angle de volant normalisé [-1, 1] → [-30°, +30°]
-  - `speed`: vitesse normalisée [-1, 1] → [-1, +1] m/s
-- **Récompenses**:
-  - Progression en X: `progress_multiplier × distance`
-  - Collision avec bump: `collision_penalty` par step
-  - Succès (100m): `success_reward`
-  - Échec (tombé/renversé): `failure_penalty`
-  - No-progress: `no_progress_penalty` si < 0.5m en 500 steps
-- **Terminaisons**:
-  - `fell`: robot tombé (z < 0.15m)
-  - `flipped`: robot renversé (angle > 60°)
-  - `no_progress`: pas de progression suffisante
-  - `success`: distance ≥ 100m (truncated, pas terminated)
-
-**Méthodes importantes:**
-- `_build_ego_centric_grid()`: Construit la grille de vision centrée et orientée selon le robot
-- `_build_cell_map_from_xml()`: Parse le XML MuJoCo pour créer la carte des cellules
-- `_build_model_from_new_generator()`: Génère un corridor aléatoire avec le générateur
-- `_compute_reward()`: Calcule la récompense basée sur progression et collisions
-
-**Détection des types de cellules:**
-- Trous: géométries avec "hole" dans le nom OU absence de géométrie
-- Bumps: géométries avec "bump" dans le nom
-- Sol: géométries avec "flat", "floor", ou "cell" dans le nom
-
----
-
-#### `corridor_generator_similar.py`
-Générateur procédural de corridors avec trous et bumps.
-
-**Fonctionnalités:**
-- Génère des patterns de trous espacés de ~4m
-- Ajoute des bumps entre les trous selon un ratio configurable
-- Évite les répétitions de positions Y consécutives
-- Crée de vrais trous en supprimant les tuiles de sol
-- Génère des tuiles de 0.5m × 0.5m
-
-**Méthodes principales:**
-- `generate_hole_pattern(length, seed)`: Génère positions des trous
-- `generate_bump_pattern()`: Génère positions des bumps entre trous
-- `generate_corridor_xml(length, width, seed, obstacle_type, bump_ratio)`: Génère XML complet
-- `save_corridor(filename, ...)`: Sauvegarde le corridor en fichier XML
-
-**Paramètres:**
-- Trous: 1 tuile (0.5m) en X, 2 tuiles (0.5m) en Y
-- Bumps: 1 tuile (0.5m) cubique
-- Positions Y: 6 niveaux pour bumps, 4 pour trous (symétriques)
-
----
-
-### 🎓 Entraînement
-
-#### `train_ppo.py`
-Script principal d'entraînement PPO avec environnements parallèles.
-
-**Architecture:**
-- **Agent**: CNN + MLP avec 3 branches
-  - Robot net: MLP pour état robot (7 → 32)
-  - History net: MLP pour historique (48 → 32)
-  - CNN: 2 couches conv pour grille (35×20×2 → 64)
-  - Backbone: Fusion des 3 branches (128 → 64)
-  - Actor/Critic: Têtes séparées
-- **Optimisation**: Adam avec learning rate configurable
-- **Parallélisation**: 30 environnements asynchrones (AsyncVectorEnv)
-- **Batch processing**: Gros batches (30,720 steps) pour GPU
-
-**Fonctionnalités:**
-- Sauvegarde automatique tous les 10 batches
-- Sauvegarde de l'état de l'optimizer pour reprise stable
-- Curriculum learning automatique basé sur distance moyenne
-- Logging des épisodes dans `episodes_log.txt`
-- Métriques CSV par batch de 20 épisodes
-- Graphiques de progression (return, distance, succès, survie)
-
-**Curriculum:**
-- Phase 1: 100% corridors aléatoires, 100% bumps
-- Phase 2: Débloquée à 50m de distance moyenne
-- Phase 3: Débloquée à 70m de distance moyenne
-- Progression irréversible (pas de régression)
-
-**Commandes:**
-```bash
-# Nouvel entraînement
-python3 train_ppo.py
-
-# Reprendre entraînement (détection auto du dernier modèle)
-python3 train_ppo.py
-```
-
----
-
-#### `test_ppo.py`
-Test d'un agent entraîné avec visualisation.
-
-**Options:**
-- `--model PATH`: Chemin du modèle (auto-détection si omis)
-- `--episodes N`: Nombre d'épisodes à tester (défaut: 5)
-- `--render`: Afficher la simulation MuJoCo
-- `--show-vision`: Afficher la fenêtre tkinter avec vision CNN
-- `--bump RATIO`: Ratio de bumps (0.0-1.0)
-- `--corridor FILE`: Utiliser un corridor XML spécifique
-
-**Fenêtre Vision CNN:**
-- 3 vues: Canal 0 (obstacles), Canal 1 (trous), Vue combinée
-- Zone de logs avec progression de l'épisode
-- Mise à jour en temps réel toutes les 5 steps
-
-**Commandes:**
-```bash
-# Test avec render et vision
-python3 test_ppo.py --render --show-vision --episodes 3
-
-# Test avec bump ratio spécifique
-python3 test_ppo.py --render --bump 0.5
-
-# Test avec corridor fixe
-python3 test_ppo.py --render --corridor corridor_yguel.xml
-```
-
----
-
-### 🎮 Contrôle Manuel
-
-#### `manual_control.py`
-Contrôle manuel du robot avec les flèches du clavier.
-
-**Contrôles:**
-- `↑`: Accélérer (toggle ON/OFF)
-- `↓`: Freiner/Reculer (toggle ON/OFF)
-- `←`: Tourner à gauche (toggle ON/OFF)
-- `→`: Tourner à droite (toggle ON/OFF)
-- `ESPACE`: Arrêt d'urgence (reset tous les états)
-- `R`: Reset environnement
-- `ESC`: Quitter
-
-**Options:**
-- `--seed N`: Utiliser un seed spécifique pour le corridor
-- `--fixed`: Utiliser un corridor fixe au lieu d'aléatoire
-- `--bump RATIO`: Ratio de bumps (0.0-1.0)
-
-**Fenêtre Vision CNN:**
-- Même interface que test_ppo.py
-- Affiche la vision du robot en temps réel
-- Logs des commandes et statut
-
-**Commandes:**
-```bash
-# Corridor aléatoire avec vision
-python3 manual_control.py
-
-# Corridor avec seed spécifique
-python3 manual_control.py --seed 9371 --bump 1.0
-
-# Corridor fixe
-python3 manual_control.py --fixed --bump 0.3
-```
-
----
-
-### 📊 Visualisation
-
-#### `plot_metrics.py`
-Génère des graphiques de progression depuis les métriques CSV.
-
-**Graphiques:**
-- Return moyen par batch
-- Distance moyenne par batch
-- Taux de succès par batch
-- Durée moyenne (steps) par batch
-
-**Commande:**
-```bash
-python3 plot_metrics.py
-```
-
-Génère: `models/training_progress_latest.png`
-
----
-
-#### `visualize_corridor_map.py`
-Visualise la carte des cellules d'un corridor.
-
-**Fonctionnalités:**
-- Affiche la cell_map avec couleurs (sol, bumps, trous)
-- Montre la position du robot
-- Utile pour débugger la détection des obstacles
-
-**Commande:**
-```bash
-python3 visualize_corridor_map.py --corridor corridor_yguel.xml
-```
-
----
-
-### 🧪 Utilitaires de Test
-
-#### `generate_test_corridor.py`
-Génère un corridor de test avec le générateur pour analyse.
-
-**Utilité:**
-- Vérifier que le générateur fonctionne correctement
-- Analyser les positions des trous et bumps
-- Tester avec des seeds spécifiques
-
-**Commande:**
-```bash
-python3 generate_test_corridor.py
-```
-
-Génère: `corridor_test_generated.xml`
-
----
-
-### 🗺️ Fichiers XML
-
-#### `four_wheel_robot.xml`
-Définition du robot 4 roues pour MuJoCo.
-
-**Caractéristiques:**
-- Empattement: 0.50m
-- Voie: 0.40m
-- Rayon des roues: 0.15m
-- 4 roues avec joints de rotation
-- Contrôle par steering angle + speed
-
----
-
-#### `corridor_yguel.xml`
-Corridor de test avec trous et bumps.
-
-**Spécificités:**
-- Trous représentés par `floor_hole_tile` avec `contype="0"` (pas de collision)
-- Bumps représentés par `floor_bump`
-- Tuiles de sol: `floor_flat`
-- Longueur: ~100m
-
----
-
-#### `corridor_erwin.xml`
-Autre corridor de test (variante).
-
----
-
-### 📂 Dossiers
-
-#### `models/`
-Contient les modèles sauvegardés et métriques.
-
-**Fichiers:**
-- `ppo_corridor_XXXXXX.pth`: Checkpoints du modèle (tous les 10 batches)
-- `training_metrics.csv`: Métriques par batch (20 épisodes)
-- `temp_training_metrics.csv`: Métriques temporaires (fusionnées à la sauvegarde)
-- `training_progress_iter_XXX.png`: Graphiques de progression
-
-**Format du checkpoint (.pth):**
-```python
-{
-    'model_state_dict': ...,      # Poids du réseau
-    'optimizer_state_dict': ...,  # État de l'optimizer (Adam)
-    'iteration': N,               # Numéro d'itération
-    'global_step': XXXXX,         # Steps totaux
-    'total_episodes': XXX,        # Épisodes totaux
-    'curriculum_state': {         # État du curriculum
-        'phase': N,
-        'distance': X.X,
-        'random_percentage': X.X,
-        'bump_ratio': X.X
-    }
-}
-```
-
----
-
-#### `final_working_model/`
-Sauvegarde du meilleur modèle final.
-
----
-
-#### `__pycache__/`
-Cache Python (généré automatiquement).
-
----
-
-### 📝 Fichiers de Logs
-
-#### `episodes_log.txt`
-Log de tous les épisodes pendant l'entraînement.
-
-**Format:**
-```
-Episode XXX: reason | Steps: XXXX | Distance: XX.XXm | Reward: XX.X | Corridor: type | Seed: XXXX
-```
-
-**Raisons de terminaison:**
-- `fell`: Tombé dans un trou
-- `flipped`: Renversé
-- `no_progress`: Pas de progression
-- `success`: Objectif atteint (100m)
-
----
-
-## 🚀 Workflow Complet
-
-### 1. Nouvel Entraînement
-```bash
-# Configurer les paramètres dans config.yaml
-nano config.yaml
-
-# Lancer l'entraînement
-python3 train_ppo.py
-
-# Suivre la progression
-tail -f episodes_log.txt
-```
-
-### 2. Reprendre un Entraînement
-```bash
-# Le script détecte automatiquement le dernier modèle
-python3 train_ppo.py
-
-# Ou spécifier un modèle
-python3 train_ppo.py --model models/ppo_corridor_921600.pth
-```
-
-### 3. Tester un Modèle
-```bash
-# Test avec visualisation
-python3 test_ppo.py --render --show-vision --episodes 5
-
-# Test avec différents niveaux de difficulté
-python3 test_ppo.py --render --bump 0.0  # Facile (seulement trous)
-python3 test_ppo.py --render --bump 0.5  # Moyen
-python3 test_ppo.py --render --bump 1.0  # Difficile (100% bumps)
-```
-
-### 4. Contrôle Manuel
-```bash
-# Tester manuellement avec vision CNN
-python3 manual_control.py
-
-# Tester un corridor spécifique vu pendant l'entraînement
-python3 manual_control.py --seed 9371 --bump 1.0
-```
-
-### 5. Analyser les Résultats
-```bash
-# Générer les graphiques
-python3 plot_metrics.py
-
-# Visualiser un corridor
-python3 visualize_corridor_map.py --corridor corridor_yguel.xml
-```
-
----
-
-## 🔍 Détails Techniques
-
-### Vision CNN Ego-Centrique
-- **Grille**: 35 lignes × 20 colonnes × 2 canaux
-- **Cell size**: 0.2m × 0.2m
-- **Vision**: 7m devant, 2m derrière, 2m de chaque côté
-- **Robot**: Toujours à la ligne 10, colonne 10 (centre)
-- **Rotation**: La grille tourne avec le robot (ego-centrique)
-
-**Canal 0 - Obstacles:**
-- 1.0 = Bump OU mur latéral
-- 0.0 = Navigable
-
-**Canal 1 - Trous:**
-- 1.0 = Trou OU extérieur avant/arrière
-- 0.0 = Navigable
-
-**Sol navigable:** Les deux canaux à 0.0
-
----
-
-### Curriculum Learning
-Le curriculum progresse automatiquement basé sur la distance moyenne:
-
-**Phase 1** (début):
-- Random corridors: 100%
-- Bump ratio: 100%
-- Seuil: 0m
-
-**Phase 2** (distance ≥ 50m):
-- Random corridors: 100%
-- Bump ratio: 50%
-- Seuil: 50m
-
-**Phase 3** (distance ≥ 70m):
-- Random corridors: 100%
-- Bump ratio: 30%
-- Seuil: 70m
-
-La progression est **irréversible** - une fois une phase atteinte, on ne régresse jamais.
-
----
-
-### Optimisations
-- **Environnements parallèles**: 30 envs asynchrones
-- **Gros batches**: 30,720 steps par rollout
-- **GPU**: Calculs sur CUDA si disponible
-- **Minibatches**: 960 steps par minibatch (32 minibatches)
-- **Epochs**: 10 epochs par batch
-- **Clip epsilon**: 0.2 pour stabilité
-
----
-
-### Sauvegarde et Reprise
-- **Sauvegarde automatique**: Tous les 10 batches
-- **Optimizer state**: Sauvegardé pour reprise stable
-- **Métriques CSV**: Fusionnées avant sauvegarde pour synchronisation
-- **Curriculum state**: Restauré à la reprise
-
-**Important:** L'optimizer state est crucial! Sans lui, les premières itérations après reprise sont catastrophiques.
-
----
-
-## 🐛 Debugging
-
-### Problème: Trous non détectés
-**Cause:** Les géométries de trous doivent avoir "hole" dans le nom OU être absentes.
-
-**Solution:** Dans le XML, utiliser:
-```xml
-<geom name="floor_hole_tile_X" contype="0" conaffinity="0" .../>
-```
-
-### Problème: Performance catastrophique après reload
-**Cause:** Optimizer state non sauvegardé/restauré.
-
-**Solution:** Vérifier que le checkpoint contient `optimizer_state_dict`.
-
-### Problème: Corridors identiques dans tous les envs
-**Cause:** Utilisation de `np.random.randint()` au lieu de `self.env_random.randint()`.
-
-**Solution:** Toujours utiliser le générateur aléatoire indépendant de chaque env.
-
----
-
-## 🎯 Objectifs du Projet
-
-1. ✅ Robot navigue dans un corridor avec vision CNN
-2. ✅ Détection des trous et bumps
-3. ✅ Curriculum learning automatique
-4. ✅ Entraînement parallèle efficace
-5. ✅ Sauvegarde/reprise stable
-6. ✅ Visualisation en temps réel
-7. ✅ Contrôle manuel pour tests
-
----
-
-## 📈 Résultats Attendus
-
-- **Phase 1** (100% bumps): ~40m de distance moyenne
-- **Phase 2** (50% bumps): ~60m de distance moyenne
-- **Phase 3** (30% bumps): ~80m+ de distance moyenne
-- **Succès**: Atteindre 100m régulièrement
-
----
-
-## 🔧 Configuration Recommandée
-
-**Pour entraînement rapide:**
-- 30 environnements parallèles
-- Batch size: 30,720
-- Learning rate: 0.0004
-- GPU: CUDA recommandé
-
-**Pour tests:**
-- 1 environnement
-- Render activé
-- Vision CNN activée
-
----
-
-## 📞 Support
-
-Pour toute question ou problème, vérifier:
-1. Les logs dans `episodes_log.txt`
-2. Les métriques dans `models/training_metrics.csv`
-3. Les graphiques générés par `plot_metrics.py`
-4. La visualisation du corridor avec `visualize_corridor_map.py`

@@ -1,545 +1,532 @@
-# PPO No Steer - Robot Navigation avec Contrôle Direct des Roues
+# PPO Steer - Contrôle par volant et vitesse
 
-Entraînement PPO pour un robot 4 roues naviguant dans un corridor avec obstacles (bumps) et trous, utilisant une vision CNN ego-centrique.
+Version avec contrôle haut niveau par volant et vitesse (action space: 2 dimensions).
 
-**DIFFÉRENCE AVEC ppo_final**: Contrôle DIRECT des 4 roues indépendantes au lieu d'un volant (steering + speed).
+## 📋 Table des matières
 
----
-
-## 🔧 Prérequis
-
-### Installation système (Ubuntu/Debian)
-
-Pour la visualisation CNN avec tkinter:
-```bash
-sudo apt update
-sudo apt install python3-tk python3-pil.imagetk
-```
-
-### Packages Python
-
-```bash
-pip install pillow python3-pil.imagetk
-```
-
-**Note**: 
-- tkinter est inclus avec Python mais nécessite `python3-tk` au niveau système
-- ImageTk nécessite `python3-pil.imagetk` pour la visualisation CNN
+- [Vue d'ensemble](#vue-densemble)
+- [Scripts disponibles](#scripts-disponibles)
+- [Pipeline d'entraînement](#pipeline-dentraînement)
+- [Architecture du réseau](#architecture-du-réseau)
+- [Configuration](#configuration)
 
 ---
 
-## 📁 Structure du Projet
+## 🎯 Vue d'ensemble
 
-### 🔧 Fichiers de Configuration
-
-#### `config.yaml`
-Configuration centrale du projet. Contient tous les hyperparamètres:
-- **PPO**: learning rate, gamma, GAE lambda, epochs, clip epsilon
-- **Training**: nombre d'environnements parallèles, steps par rollout, batch sizes
-- **Network**: architecture CNN et MLP (couches, tailles)
-- **Vision**: dimensions de la grille, cell_size, distances de vision
-- **Robot**: paramètres de contrôle (spawn angle) - PAS de steering/speed car contrôle direct des roues
-- **Corridor**: longueur, largeur, distance de succès
-- **Rewards**: récompenses/pénalités pour succès, échec, progression, collision, no-progress
-- **Curriculum**: progression automatique basée sur la distance moyenne
-  - `random_corridor_schedule`: % de corridors aléatoires vs fixes
-  - `bump_ratio_schedule`: ratio de bumps ajoutés aux trous par phase
+Cette version contrôle le robot comme une voiture:
+- **Action space**: `Box(-1.0, 1.0, (2,))` 
+- **Actions**: `[steering_angle, speed]`
+  - `steering_angle`: Angle de volant normalisé [-1, 1] → [-30°, +30°]
+  - `speed`: Vitesse normalisée [-1, 1] → [-max_speed, +max_speed]
+- Conversion automatique vers vitesses des 4 roues via `steer_angle_to_wheel_speeds()`
+- Plus naturel et plus simple à apprendre
 
 ---
 
-### 🤖 Environnement
+## 🔄 Conversion steering → wheel speeds
 
-#### `corridor_env.py`
-Environnement Gymnasium pour le robot dans le corridor.
+La fonction `steer_angle_to_wheel_speeds()` convertit les commandes haut niveau en vitesses de roues:
 
-**CONTRÔLE**: 4 actions continues (vitesses angulaires des roues) au lieu de 2 (steering + speed)
-
-**Caractéristiques:**
-- **Observation**: 
-  - État robot: position (x,y,z), vitesse (vx,vy,vz), angle (θ)
-  - Historique: 8 frames de vitesses passées (48 valeurs)
-  - Grille CNN: 35×20×2 canaux (obstacles, trous) - vision ego-centrique
-- **Action**: 
-  - `steering_angle`: angle de volant normalisé [-1, 1] → [-30°, +30°]
-  - `speed`: vitesse normalisée [-1, 1] → [-1, +1] m/s
-- **Récompenses**:
-  - Progression en X: `progress_multiplier × distance`
-  - Collision avec bump: `collision_penalty` par step
-  - Succès (100m): `success_reward`
-  - Échec (tombé/renversé): `failure_penalty`
-  - No-progress: `no_progress_penalty` si < 0.5m en 500 steps
-- **Terminaisons**:
-  - `fell`: robot tombé (z < 0.15m)
-  - `flipped`: robot renversé (angle > 60°)
-  - `no_progress`: pas de progression suffisante
-  - `success`: distance ≥ 100m (truncated, pas terminated)
-
-**Méthodes importantes:**
-- `_build_ego_centric_grid()`: Construit la grille de vision centrée et orientée selon le robot
-- `_build_cell_map_from_xml()`: Parse le XML MuJoCo pour créer la carte des cellules
-- `_build_model_from_new_generator()`: Génère un corridor aléatoire avec le générateur
-- `_compute_reward()`: Calcule la récompense basée sur progression et collisions
-
-**Détection des types de cellules:**
-- Trous: géométries avec "hole" dans le nom OU absence de géométrie
-- Bumps: géométries avec "bump" dans le nom
-- Sol: géométries avec "flat", "floor", ou "cell" dans le nom
-
----
-
-#### `corridor_generator_similar.py`
-Générateur procédural de corridors avec trous et bumps.
-
-**Fonctionnalités:**
-- Génère des patterns de trous espacés de ~4m
-- Ajoute des bumps entre les trous selon un ratio configurable
-- Évite les répétitions de positions Y consécutives
-- Crée de vrais trous en supprimant les tuiles de sol
-- Génère des tuiles de 0.5m × 0.5m
-
-**Méthodes principales:**
-- `generate_hole_pattern(length, seed)`: Génère positions des trous
-- `generate_bump_pattern()`: Génère positions des bumps entre trous
-- `generate_corridor_xml(length, width, seed, obstacle_type, bump_ratio)`: Génère XML complet
-- `save_corridor(filename, ...)`: Sauvegarde le corridor en fichier XML
-
-**Paramètres:**
-- Trous: 1 tuile (0.5m) en X, 2 tuiles (0.5m) en Y
-- Bumps: 1 tuile (0.5m) cubique
-- Positions Y: 6 niveaux pour bumps, 4 pour trous (symétriques)
-
----
-
-### 🎓 Entraînement
-
-#### `train_ppo.py`
-Script principal d'entraînement PPO avec environnements parallèles.
-
-**Architecture:**
-- **Agent**: CNN + MLP avec 3 branches
-  - Robot net: MLP pour état robot (7 → 32)
-  - History net: MLP pour historique (48 → 32)
-  - CNN: 2 couches conv pour grille (35×20×2 → 64)
-  - Backbone: Fusion des 3 branches (128 → 64)
-  - Actor/Critic: Têtes séparées
-- **Optimisation**: Adam avec learning rate configurable
-- **Parallélisation**: 30 environnements asynchrones (AsyncVectorEnv)
-- **Batch processing**: Gros batches (30,720 steps) pour GPU
-
-**Fonctionnalités:**
-- Sauvegarde automatique tous les 10 batches
-- Sauvegarde de l'état de l'optimizer pour reprise stable
-- Curriculum learning automatique basé sur distance moyenne
-- Logging des épisodes dans `episodes_log.txt`
-- Métriques CSV par batch de 20 épisodes
-- Graphiques de progression (return, distance, succès, survie)
-
-**Curriculum:**
-- Phase 1: 100% corridors aléatoires, 100% bumps
-- Phase 2: Débloquée à 50m de distance moyenne
-- Phase 3: Débloquée à 70m de distance moyenne
-- Progression irréversible (pas de régression)
-
-**Commandes:**
-```bash
-# Nouvel entraînement
-python3 train_ppo.py
-
-# Reprendre entraînement (détection auto du dernier modèle)
-python3 train_ppo.py
-```
-
----
-
-#### `test_ppo.py`
-Test d'un agent entraîné avec visualisation.
-
-**Options:**
-- `--model PATH`: Chemin du modèle (auto-détection si omis)
-- `--episodes N`: Nombre d'épisodes à tester (défaut: 5)
-- `--render`: Afficher la simulation MuJoCo
-- `--show-vision`: Afficher la fenêtre tkinter avec vision CNN
-- `--bump RATIO`: Ratio de bumps (0.0-1.0)
-- `--corridor FILE`: Utiliser un corridor XML spécifique
-
-**Fenêtre Vision CNN:**
-- 3 vues: Canal 0 (obstacles), Canal 1 (trous), Vue combinée
-- Zone de logs avec progression de l'épisode
-- Mise à jour en temps réel toutes les 5 steps
-
-**Commandes:**
-```bash
-# Test avec render et vision
-python3 test_ppo.py --render --show-vision --episodes 3
-
-# Test avec bump ratio spécifique
-python3 test_ppo.py --render --bump 0.5
-
-# Test avec corridor fixe
-python3 test_ppo.py --render --corridor corridor_yguel.xml
-```
-
----
-
-### 🎮 Contrôle Manuel
-
-#### `manual_control.py`
-Contrôle manuel du robot avec les flèches du clavier.
-
-**Contrôles:**
-- `↑`: Accélérer (toggle ON/OFF)
-- `↓`: Freiner/Reculer (toggle ON/OFF)
-- `←`: Tourner à gauche (toggle ON/OFF)
-- `→`: Tourner à droite (toggle ON/OFF)
-- `ESPACE`: Arrêt d'urgence (reset tous les états)
-- `R`: Reset environnement
-- `ESC`: Quitter
-
-**Options:**
-- `--seed N`: Utiliser un seed spécifique pour le corridor
-- `--fixed`: Utiliser un corridor fixe au lieu d'aléatoire
-- `--bump RATIO`: Ratio de bumps (0.0-1.0)
-
-**Fenêtre Vision CNN:**
-- Même interface que test_ppo.py
-- Affiche la vision du robot en temps réel
-- Logs des commandes et statut
-
-**Commandes:**
-```bash
-# Corridor aléatoire avec vision
-python3 manual_control.py
-
-# Corridor avec seed spécifique
-python3 manual_control.py --seed 9371 --bump 1.0
-
-# Corridor fixe
-python3 manual_control.py --fixed --bump 0.3
-```
-
----
-
-### 📊 Visualisation
-
-#### `plot_metrics.py`
-Génère des graphiques de progression depuis les métriques CSV.
-
-**Graphiques:**
-- Return moyen par batch
-- Distance moyenne par batch
-- Taux de succès par batch
-- Durée moyenne (steps) par batch
-
-**Commande:**
-```bash
-python3 plot_metrics.py
-```
-
-Génère: `models/training_progress_latest.png`
-
----
-
-#### `visualize_corridor_map.py`
-Visualise la carte des cellules d'un corridor.
-
-**Fonctionnalités:**
-- Affiche la cell_map avec couleurs (sol, bumps, trous)
-- Montre la position du robot
-- Utile pour débugger la détection des obstacles
-
-**Commande:**
-```bash
-python3 visualize_corridor_map.py --corridor corridor_yguel.xml
-```
-
----
-
-### 🧪 Utilitaires de Test
-
-#### `generate_test_corridor.py`
-Génère un corridor de test avec le générateur pour analyse.
-
-**Utilité:**
-- Vérifier que le générateur fonctionne correctement
-- Analyser les positions des trous et bumps
-- Tester avec des seeds spécifiques
-
-**Commande:**
-```bash
-python3 generate_test_corridor.py
-```
-
-Génère: `corridor_test_generated.xml`
-
----
-
-### 🗺️ Fichiers XML
-
-#### `four_wheel_robot.xml`
-Définition du robot 4 roues pour MuJoCo.
-
-**Caractéristiques:**
-- Empattement: 0.50m
-- Voie: 0.40m
-- Rayon des roues: 0.15m
-- 4 roues avec joints de rotation
-- Contrôle par steering angle + speed
-
----
-
-#### `corridor_yguel.xml`
-Corridor de test avec trous et bumps.
-
-**Spécificités:**
-- Trous représentés par `floor_hole_tile` avec `contype="0"` (pas de collision)
-- Bumps représentés par `floor_bump`
-- Tuiles de sol: `floor_flat`
-- Longueur: ~100m
-
----
-
-#### `corridor_erwin.xml`
-Autre corridor de test (variante).
-
----
-
-### 📂 Dossiers
-
-#### `models/`
-Contient les modèles sauvegardés et métriques.
-
-**Fichiers:**
-- `ppo_corridor_XXXXXX.pth`: Checkpoints du modèle (tous les 10 batches)
-- `training_metrics.csv`: Métriques par batch (20 épisodes)
-- `temp_training_metrics.csv`: Métriques temporaires (fusionnées à la sauvegarde)
-- `training_progress_iter_XXX.png`: Graphiques de progression
-
-**Format du checkpoint (.pth):**
 ```python
-{
-    'model_state_dict': ...,      # Poids du réseau
-    'optimizer_state_dict': ...,  # État de l'optimizer (Adam)
-    'iteration': N,               # Numéro d'itération
-    'global_step': XXXXX,         # Steps totaux
-    'total_episodes': XXX,        # Épisodes totaux
-    'curriculum_state': {         # État du curriculum
-        'phase': N,
-        'distance': X.X,
-        'random_percentage': X.X,
-        'bump_ratio': X.X
-    }
-}
+def steer_angle_to_wheel_speeds(steering_angle, speed, wheelbase, track_width):
+    """
+    steering_angle: angle en radians [-π/6, +π/6] (±30°)
+    speed: vitesse linéaire en m/s
+    wheelbase: distance entre essieux (m)
+    track_width: largeur entre roues (m)
+    
+    Returns: [v_FL, v_FR, v_RL, v_RR] (vitesses angulaires rad/s)
+    """
 ```
 
----
-
-#### `final_working_model/`
-Sauvegarde du meilleur modèle final.
-
----
-
-#### `__pycache__/`
-Cache Python (généré automatiquement).
+**Principe:**
+1. Calculer rayon de braquage: `R = wheelbase / tan(steering_angle)`
+2. Calculer vitesses linéaires des roues gauche/droite
+3. Convertir en vitesses angulaires: `ω = v / wheel_radius`
 
 ---
 
-### 📝 Fichiers de Logs
+## 📜 Scripts disponibles
 
-#### `episodes_log.txt`
-Log de tous les épisodes pendant l'entraînement.
+### 1. train_ppo.py - Entraînement
 
-**Format:**
-```
-Episode XXX: reason | Steps: XXXX | Distance: XX.XXm | Reward: XX.X | Corridor: type | Seed: XXXX
-```
+Identique à ppo_no_steer mais avec action space 2D.
 
-**Raisons de terminaison:**
-- `fell`: Tombé dans un trou
-- `flipped`: Renversé
-- `no_progress`: Pas de progression
-- `success`: Objectif atteint (100m)
-
----
-
-## 🚀 Workflow Complet
-
-### 1. Nouvel Entraînement
+**Usage:**
 ```bash
-# Configurer les paramètres dans config.yaml
-nano config.yaml
-
-# Lancer l'entraînement
-python3 train_ppo.py
-
-# Suivre la progression
-tail -f episodes_log.txt
+python train_ppo.py [OPTIONS]
 ```
 
-### 2. Reprendre un Entraînement
+**Arguments:**
+- `--config PATH`: Fichier de configuration YAML (défaut: `config.yaml`)
+- `--timesteps N`: Override total timesteps (défaut: 8,000,000)
+- `--num-envs N`: Override nombre d'environnements parallèles (défaut: 30)
+- `--num-steps N`: Override steps par rollout (défaut: 1024)
+- `--lr FLOAT`: Override learning rate (défaut: 0.0004)
+- `--seed N`: Override seed pour reproductibilité (défaut: 1)
+- `--fresh-start`: Forcer nouveau démarrage (ignorer checkpoints existants)
+- `--rollback`: Activer rollback automatique si performance régresse
+
+**Exemples:**
 ```bash
-# Le script détecte automatiquement le dernier modèle
-python3 train_ppo.py
+# Entraînement standard avec rollback
+python train_ppo.py --rollback
 
-# Ou spécifier un modèle
-python3 train_ppo.py --model models/ppo_corridor_921600.pth
+# Nouveau démarrage
+python train_ppo.py --fresh-start
+
+# Override paramètres
+python train_ppo.py --lr 0.0003 --num-envs 16
 ```
 
-### 3. Tester un Modèle
+**Différence clé avec ppo_no_steer:**
+- Action space: 2D au lieu de 4D
+- Actor head: `Linear(64, 2)` au lieu de `Linear(64, 4)`
+- Conversion automatique dans `corridor_env.py`
+
+---
+
+### 2. test_ppo.py - Test d'un modèle
+
+Identique à ppo_no_steer.
+
+**Usage:**
 ```bash
-# Test avec visualisation
-python3 test_ppo.py --render --show-vision --episodes 5
-
-# Test avec différents niveaux de difficulté
-python3 test_ppo.py --render --bump 0.0  # Facile (seulement trous)
-python3 test_ppo.py --render --bump 0.5  # Moyen
-python3 test_ppo.py --render --bump 1.0  # Difficile (100% bumps)
+python test_ppo.py [OPTIONS]
 ```
 
-### 4. Contrôle Manuel
+**Arguments:**
+- `--model PATH`: Chemin vers le checkpoint (défaut: dernier checkpoint trouvé)
+- `--config PATH`: Fichier de configuration YAML (défaut: `config.yaml`)
+- `--num-episodes N`: Nombre d'épisodes à tester (défaut: 10)
+- `--render`: Afficher le rendu 3D MuJoCo
+- `--show-vision`: Afficher la vision CNN en temps réel
+- `--corridor PATH`: Utiliser un corridor spécifique (XML)
+- `--bump-ratio FLOAT`: Ratio de bosses (0.0 à 1.0, défaut: depuis config)
+
+**Exemples:**
 ```bash
-# Tester manuellement avec vision CNN
-python3 manual_control.py
+# Test avec rendu et vision
+python test_ppo.py --render --show-vision --num-episodes 5
 
-# Tester un corridor spécifique vu pendant l'entraînement
-python3 manual_control.py --seed 9371 --bump 1.0
+# Test sur corridor difficile
+python test_ppo.py --render --bump-ratio 1.0
+
+# Test checkpoint spécifique
+python test_ppo.py --model models/ppo_corridor_50.pth --render
 ```
 
-### 5. Analyser les Résultats
+---
+
+### 3. visualize_corridor_map.py - Visualisation CNN
+
+Identique à ppo_no_steer.
+
+**Usage:**
 ```bash
-# Générer les graphiques
-python3 plot_metrics.py
+python visualize_corridor_map.py [OPTIONS]
+```
 
-# Visualiser un corridor
-python3 visualize_corridor_map.py --corridor corridor_yguel.xml
+**Arguments:**
+- `--corridor PATH`: Fichier XML du corridor (défaut: génération aléatoire)
+- `--x FLOAT`: Position X du robot (défaut: aléatoire)
+- `--y FLOAT`: Position Y du robot (défaut: aléatoire)
+- `--angle FLOAT`: Angle du robot en degrés (défaut: aléatoire)
+- `--seed N`: Seed pour génération aléatoire
+- `--bump-ratio FLOAT`: Ratio de bosses (0.0 à 1.0, défaut: 0.5)
+- `--render`: Ouvrir rendu 3D MuJoCo après visualisation
+
+**Exemples:**
+```bash
+# Visualisation aléatoire
+python visualize_corridor_map.py
+
+# Position spécifique avec rendu
+python visualize_corridor_map.py --x 50 --y 0.5 --angle 15 --render
 ```
 
 ---
 
-## 🔍 Détails Techniques
+### 4. plot_metrics.py - Graphiques de métriques
 
-### Vision CNN Ego-Centrique
-- **Grille**: 35 lignes × 20 colonnes × 2 canaux
-- **Cell size**: 0.2m × 0.2m
-- **Vision**: 7m devant, 2m derrière, 2m de chaque côté
-- **Robot**: Toujours à la ligne 10, colonne 10 (centre)
-- **Rotation**: La grille tourne avec le robot (ego-centrique)
+Identique à ppo_no_steer.
 
-**Canal 0 - Obstacles:**
-- 1.0 = Bump OU mur latéral
-- 0.0 = Navigable
-
-**Canal 1 - Trous:**
-- 1.0 = Trou OU extérieur avant/arrière
-- 0.0 = Navigable
-
-**Sol navigable:** Les deux canaux à 0.0
-
----
-
-### Curriculum Learning
-Le curriculum progresse automatiquement basé sur la distance moyenne:
-
-**Phase 1** (début):
-- Random corridors: 100%
-- Bump ratio: 100%
-- Seuil: 0m
-
-**Phase 2** (distance ≥ 50m):
-- Random corridors: 100%
-- Bump ratio: 50%
-- Seuil: 50m
-
-**Phase 3** (distance ≥ 70m):
-- Random corridors: 100%
-- Bump ratio: 30%
-- Seuil: 70m
-
-La progression est **irréversible** - une fois une phase atteinte, on ne régresse jamais.
-
----
-
-### Optimisations
-- **Environnements parallèles**: 30 envs asynchrones
-- **Gros batches**: 30,720 steps par rollout
-- **GPU**: Calculs sur CUDA si disponible
-- **Minibatches**: 960 steps par minibatch (32 minibatches)
-- **Epochs**: 10 epochs par batch
-- **Clip epsilon**: 0.2 pour stabilité
-
----
-
-### Sauvegarde et Reprise
-- **Sauvegarde automatique**: Tous les 10 batches
-- **Optimizer state**: Sauvegardé pour reprise stable
-- **Métriques CSV**: Fusionnées avant sauvegarde pour synchronisation
-- **Curriculum state**: Restauré à la reprise
-
-**Important:** L'optimizer state est crucial! Sans lui, les premières itérations après reprise sont catastrophiques.
-
----
-
-## 🐛 Debugging
-
-### Problème: Trous non détectés
-**Cause:** Les géométries de trous doivent avoir "hole" dans le nom OU être absentes.
-
-**Solution:** Dans le XML, utiliser:
-```xml
-<geom name="floor_hole_tile_X" contype="0" conaffinity="0" .../>
+**Usage:**
+```bash
+python plot_metrics.py [CSV_FILE]
 ```
 
-### Problème: Performance catastrophique après reload
-**Cause:** Optimizer state non sauvegardé/restauré.
+---
 
-**Solution:** Vérifier que le checkpoint contient `optimizer_state_dict`.
+### 5. corridor_env.py - Environnement Gymnasium
 
-### Problème: Corridors identiques dans tous les envs
-**Cause:** Utilisation de `np.random.randint()` au lieu de `self.env_random.randint()`.
+**Différence clé:** Action space et conversion
 
-**Solution:** Toujours utiliser le générateur aléatoire indépendant de chaque env.
+```python
+# Action space
+self.action_space = spaces.Box(-1.0, 1.0, (2,), dtype=np.float32)
+
+# Dans step()
+def step(self, action):
+    steering_angle_normalized = action[0]  # [-1, 1]
+    speed_normalized = action[1]           # [-1, 1]
+    
+    # Dénormaliser
+    steering_angle = steering_angle_normalized * self.max_steering_angle_rad
+    speed = speed_normalized * self.max_speed
+    
+    # Convertir en vitesses de roues
+    wheel_speeds = steer_angle_to_wheel_speeds(
+        steering_angle, speed, 
+        self.wheelbase_length, self.track_width
+    )
+    
+    # Appliquer aux actuateurs
+    self.data.ctrl[:] = wheel_speeds
+```
 
 ---
 
-## 🎯 Objectifs du Projet
+## 🔄 Pipeline d'entraînement complet
 
-1. ✅ Robot navigue dans un corridor avec vision CNN
-2. ✅ Détection des trous et bumps
-3. ✅ Curriculum learning automatique
-4. ✅ Entraînement parallèle efficace
-5. ✅ Sauvegarde/reprise stable
-6. ✅ Visualisation en temps réel
-7. ✅ Contrôle manuel pour tests
+Le pipeline est identique à ppo_no_steer, seule la dimension de l'action change.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         INITIALISATION                          │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    ┌──────────────────┐
+                    │ load_config()    │ ← config.yaml
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │ Créer Agent      │ ← Actor: 64→2 (steering+speed)
+                    │ + Optimizer      │
+                    └────────┬─────────┘
+                             │
+                             ▼
+                    ┌──────────────────┐
+                    │ find_latest_     │
+                    │ checkpoint()     │
+                    └────────┬─────────┘
+                             │
+                    ┌────────┴────────┐
+                    │                 │
+                    ▼                 ▼
+            ┌──────────────┐   ┌──────────────┐
+            │ Checkpoint   │   │ Pas de       │
+            │ trouvé       │   │ checkpoint   │
+            └──────┬───────┘   └──────┬───────┘
+                   │                  │
+                   └──────────┬───────┘
+                              │
+                              ▼
+         ┌─────────────────────────────────┐
+         │ Créer environnements parallèles │
+         │ AsyncVectorEnv (30 envs)        │
+         │ Action space: Box(-1,1,(2,))    │
+         └─────────────┬───────────────────┘
+                       │
+                       ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                      BOUCLE D'ENTRAÎNEMENT                       │
+│                    (260 itérations × 30,720 steps)               │
+└──────────────────────────────────────────────────────────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ COLLECTE ROLLOUT            │
+         │ (30 envs × 1024 steps)      │
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ Pour chaque step:           │
+         │ 1. agent.get_action(obs)    │ ← Forward: obs → [steering, speed]
+         │ 2. envs.step(actions)       │ ← Conversion: [s,v] → [4 wheels]
+         │ 3. Stocker transitions      │
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ CALCUL ADVANTAGES           │
+         │ compute_gae()               │
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ UPDATE PPO                  │
+         │ (10 epochs × 32 minibatches)│
+         │ Actor: 2 actions            │
+         └─────────────┬───────────────┘
+                       │
+                       ▼
+         ┌─────────────────────────────┐
+         │ MÉTRIQUES + SAUVEGARDE      │
+         │ (identique à no_steer)      │
+         └─────────────────────────────┘
+```
+
+**Différence principale:** 
+- Agent produit 2 actions au lieu de 4
+- Environnement convertit automatiquement en 4 vitesses de roues
 
 ---
 
-## 📈 Résultats Attendus
+## 🧠 Architecture du réseau
 
-- **Phase 1** (100% bumps): ~40m de distance moyenne
-- **Phase 2** (50% bumps): ~60m de distance moyenne
-- **Phase 3** (30% bumps): ~80m+ de distance moyenne
-- **Succès**: Atteindre 100m régulièrement
+### Vue d'ensemble
+
+```
+OBSERVATION (7 + history_dim + grid_dim valeurs)
+    │
+    ├─────────────────┬─────────────────┬─────────────────┐
+    │                 │                 │                 │
+    ▼                 ▼                 ▼                 ▼
+┌─────────┐    ┌──────────┐    ┌──────────┐    ┌──────────────┐
+│ Robot   │    │ History  │    │ Grid     │    │ Grid         │
+│ State   │    │ (48 val) │    │ Canal 0  │    │ Canal 1      │
+│ (7 val) │    │          │    │(obstacles│    │ (trous)      │
+└────┬────┘    └─────┬────┘    └─────┬────┘    └──────┬───────┘
+     │               │               │                 │
+     ▼               ▼               └────────┬────────┘
+┌─────────┐    ┌──────────┐                  │
+│ MLP     │    │ MLP      │                  ▼
+│ 7→32    │    │ 48→64→32 │         ┌─────────────────┐
+└────┬────┘    └─────┬────┘         │ CNN 2 canaux    │
+     │               │              │ Conv 2→32       │
+     │               │              │ Conv 32→64      │
+     │               │              │ Flatten         │
+     │               │              │ Linear→64       │
+     │               │              └────────┬────────┘
+     │               │                       │
+     └───────┬───────┴───────────────────────┘
+             │
+             ▼
+    ┌─────────────────┐
+    │ Concatenate     │
+    │ (32+32+64=128)  │
+    └────────┬────────┘
+             │
+             ▼
+    ┌─────────────────┐
+    │ Backbone MLP    │
+    │ 128→64          │
+    └────────┬────────┘
+             │
+             ├─────────────────┬─────────────────┐
+             │                 │                 │
+             ▼                 ▼                 ▼
+    ┌─────────────┐   ┌─────────────┐   ┌─────────────┐
+    │ Actor Mean  │   │ Actor LogStd│   │ Critic      │
+    │ 64→2        │   │ (learnable) │   │ 64→1        │
+    │ [steer,spd] │   │             │   │             │
+    └──────┬──────┘   └──────┬──────┘   └──────┬──────┘
+           │                 │                  │
+           └────────┬────────┘                  │
+                    │                           │
+                    ▼                           ▼
+           ┌─────────────────┐         ┌─────────────┐
+           │ Normal(μ, σ)    │         │ Value       │
+           │ Sample action   │         │ Estimate    │
+           │ [steering,speed]│         │             │
+           └─────────────────┘         └─────────────┘
+```
+
+**Différence avec no_steer:**
+- Actor Mean: `Linear(64, 2)` au lieu de `Linear(64, 4)`
+- Actor LogStd: `Parameter(zeros(1, 2))` au lieu de `(1, 4)`
+- Output: `[steering_angle, speed]` au lieu de `[wheel_FL, wheel_FR, wheel_RL, wheel_RR]`
+
+Le reste de l'architecture est identique.
 
 ---
 
-## 🔧 Configuration Recommandée
+## ⚙️ Configuration (config.yaml)
 
-**Pour entraînement rapide:**
-- 30 environnements parallèles
-- Batch size: 30,720
-- Learning rate: 0.0004
-- GPU: CUDA recommandé
+Configuration identique à ppo_no_steer. Voir [ppo_no_steer/README.md](../ppo_no_steer/README.md#configuration-configyaml) pour détails complets.
 
-**Pour tests:**
-- 1 environnement
-- Render activé
-- Vision CNN activée
+**Paramètres clés:**
+```yaml
+training:
+  total_timesteps: 8000000
+  num_envs: 30
+  num_steps: 1024
+
+ppo:
+  lr: 0.0004
+  gamma: 0.995
+  gae_lambda: 0.98
+
+robot:
+  max_steering_angle: 30.0  # Angle max en degrés
+  max_speed: 1.0           # Vitesse max en m/s
+
+curriculum:
+  enabled: true
+  bump_ratio_schedule:
+    - phase: 1
+      bump_ratio: 0.5
+      distance_threshold: 10
+    # ... (voir config.yaml)
+```
 
 ---
 
-## 📞 Support
+## 🎮 Interprétation des actions
 
-Pour toute question ou problème, vérifier:
-1. Les logs dans `episodes_log.txt`
-2. Les métriques dans `models/training_metrics.csv`
-3. Les graphiques générés par `plot_metrics.py`
-4. La visualisation du corridor avec `visualize_corridor_map.py`
+### Action space
+
+```python
+action = [steering_angle_normalized, speed_normalized]
+# Chaque valeur dans [-1, 1]
+```
+
+### Exemples d'actions
+
+| Action | Interprétation | Résultat |
+|--------|---------------|----------|
+| `[0.0, 0.8]` | Tout droit, vitesse 80% | Avancer droit |
+| `[1.0, 0.8]` | Gauche max (+30°), vitesse 80% | Tourner à gauche |
+| `[-1.0, 0.8]` | Droite max (-30°), vitesse 80% | Tourner à droite |
+| `[0.5, 0.5]` | Gauche 15°, vitesse 50% | Virage doux gauche |
+| `[0.0, -0.5]` | Tout droit, reculer 50% | Reculer droit |
+| `[0.0, 0.0]` | Pas de mouvement | Arrêt |
+
+### Conversion en vitesses de roues
+
+```python
+# Exemple: action = [0.5, 0.8]
+steering_angle = 0.5 * 30° = 15° = 0.262 rad
+speed = 0.8 * 1.0 m/s = 0.8 m/s
+
+# Calcul rayon de braquage
+R = wheelbase / tan(steering_angle)
+R = 0.5 / tan(0.262) = 1.88 m
+
+# Vitesses linéaires
+v_left = speed * (R - track_width/2) / R
+v_right = speed * (R + track_width/2) / R
+
+# Vitesses angulaires (rad/s)
+ω_left = v_left / wheel_radius
+ω_right = v_right / wheel_radius
+
+# Résultat: [ω_FL, ω_FR, ω_RL, ω_RR]
+```
+
+---
+
+## 📊 Métriques trackées
+
+Identiques à ppo_no_steer. Voir [ppo_no_steer/README.md](../ppo_no_steer/README.md#métriques-trackées).
+
+---
+
+## 🎓 Curriculum Learning
+
+Identique à ppo_no_steer. Voir [ppo_no_steer/README.md](../ppo_no_steer/README.md#curriculum-learning).
+
+---
+
+## 🚀 Exemples d'utilisation
+
+### Entraînement
+
+```bash
+# Entraînement standard avec rollback
+python train_ppo.py --rollback
+
+# Nouveau démarrage
+python train_ppo.py --fresh-start
+
+# Override paramètres
+python train_ppo.py --lr 0.0003 --num-envs 16 --seed 42
+```
+
+### Test
+
+```bash
+# Test avec visualisation complète
+python test_ppo.py --render --show-vision --num-episodes 5
+
+# Test sur corridor difficile
+python test_ppo.py --render --bump-ratio 1.0
+
+# Test checkpoint spécifique
+python test_ppo.py --model models/ppo_corridor_50.pth --render
+```
+
+### Visualisation
+
+```bash
+# Visualiser vision CNN
+python visualize_corridor_map.py --render
+
+# Position spécifique
+python visualize_corridor_map.py --x 50 --y 0.5 --angle 15
+```
+
+---
+
+## 🔍 Avantages vs ppo_no_steer
+
+### Avantages du steering
+
+1. **Action space plus petit**: 2D au lieu de 4D
+   - Moins de dimensions à explorer
+   - Convergence potentiellement plus rapide
+
+2. **Contrôle plus naturel**: Comme une vraie voiture
+   - Steering + vitesse = intuition humaine
+   - Contraintes physiques respectées automatiquement
+
+3. **Moins de degrés de liberté**: 
+   - Impossible de faire des mouvements "impossibles"
+   - Comportement plus cohérent
+
+### Inconvénients
+
+1. **Moins de flexibilité**: 
+   - Impossible de tourner sur place
+   - Impossible de faire des mouvements latéraux
+
+2. **Dépendance à la conversion**:
+   - Qualité dépend de `steer_angle_to_wheel_speeds()`
+   - Paramètres physiques doivent être corrects
+
+---
+
+## 📝 Notes importantes
+
+- L'architecture du réseau est identique à ppo_no_steer sauf l'actor head
+- La conversion steering→wheels est faite dans l'environnement, pas dans l'agent
+- Les checkpoints ne sont PAS compatibles entre no_steer et steer (dimensions différentes)
+- Le curriculum et les métriques fonctionnent exactement pareil
+- Les fichiers générés ont la même structure
+
+---
+
+## 🔄 Migration depuis ppo_no_steer
+
+Pour migrer un entraînement de no_steer vers steer:
+
+1. **Impossible de réutiliser les checkpoints** (dimensions différentes)
+2. **Possible de réutiliser config.yaml** (compatible)
+3. **Possible de réutiliser les corridors XML** (identiques)
+4. **Recommandé**: Commencer un nouvel entraînement avec `--fresh-start`
+
+---
+
+## 📚 Voir aussi
+
+- [README général](../README.md): Vue d'ensemble du projet
+- [ppo_no_steer/README.md](../ppo_no_steer/README.md): Version 4 roues indépendantes
+- Configuration détaillée dans `config.yaml`
+- Architecture détaillée dans `corridor_env.py`
+
+---
