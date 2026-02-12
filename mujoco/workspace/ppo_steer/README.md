@@ -2,6 +2,8 @@
 
 Version avec contrôle haut niveau par volant et vitesse (action space: 2 dimensions).
 
+**Emplacement**: `mujoco/workspace/ppo_steer/`
+
 ## 📋 Table des matières
 
 - [Vue d'ensemble](#vue-densemble)
@@ -21,6 +23,8 @@ Cette version contrôle le robot comme une voiture:
   - `speed`: Vitesse normalisée [-1, 1] → [-max_speed, +max_speed]
 - Conversion automatique vers vitesses des 4 roues via `steer_angle_to_wheel_speeds()`
 - Plus naturel et plus simple à apprendre
+
+**Prérequis**: Environnement Docker lancé (voir [README principal](../../../README.md))
 
 ---
 
@@ -55,6 +59,8 @@ Identique à ppo_no_steer mais avec action space 2D.
 
 **Usage:**
 ```bash
+# Dans l'environnement Docker
+cd ~/workspace/ppo_steer
 python train_ppo.py [OPTIONS]
 ```
 
@@ -70,8 +76,18 @@ python train_ppo.py [OPTIONS]
 
 **Exemples:**
 ```bash
+# Dans l'environnement Docker
+cd ~/workspace/ppo_steer
+
 # Entraînement standard avec rollback
 python train_ppo.py --rollback
+
+# Nouveau démarrage
+python train_ppo.py --fresh-start
+
+# Override paramètres
+python train_ppo.py --lr 0.0003 --num-envs 16
+```
 
 # Nouveau démarrage
 python train_ppo.py --fresh-start
@@ -107,6 +123,9 @@ python test_ppo.py [OPTIONS]
 
 **Exemples:**
 ```bash
+# Dans l'environnement Docker
+cd ~/workspace/ppo_steer
+
 # Test avec rendu et vision
 python test_ppo.py --render --show-vision --num-episodes 5
 
@@ -139,6 +158,9 @@ python visualize_corridor_map.py [OPTIONS]
 
 **Exemples:**
 ```bash
+# Dans l'environnement Docker
+cd ~/workspace/ppo_steer
+
 # Visualisation aléatoire
 python visualize_corridor_map.py
 
@@ -438,6 +460,9 @@ Identique à ppo_no_steer. Voir [ppo_no_steer/README.md](../ppo_no_steer/README.
 ### Entraînement
 
 ```bash
+# Dans l'environnement Docker
+cd ~/workspace/ppo_steer
+
 # Entraînement standard avec rollback
 python train_ppo.py --rollback
 
@@ -451,6 +476,9 @@ python train_ppo.py --lr 0.0003 --num-envs 16 --seed 42
 ### Test
 
 ```bash
+# Dans l'environnement Docker
+cd ~/workspace/ppo_steer
+
 # Test avec visualisation complète
 python test_ppo.py --render --show-vision --num-episodes 5
 
@@ -464,6 +492,9 @@ python test_ppo.py --model models/ppo_corridor_50.pth --render
 ### Visualisation
 
 ```bash
+# Dans l'environnement Docker
+cd ~/workspace/ppo_steer
+
 # Visualiser vision CNN
 python visualize_corridor_map.py --render
 

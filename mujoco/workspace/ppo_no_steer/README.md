@@ -2,6 +2,8 @@
 
 Version avec contrôle direct des 4 roues indépendamment (action space: 4 dimensions).
 
+**Emplacement**: `mujoco/workspace/ppo_no_steer/`
+
 ## 📋 Table des matières
 
 - [Vue d'ensemble](#vue-densemble)
@@ -20,6 +22,8 @@ Cette version contrôle directement les 4 roues du robot:
 - Chaque valeur représente la vitesse de la roue correspondante
 - Plus de liberté mais plus difficile à apprendre
 
+**Prérequis**: Environnement Docker lancé (voir [README principal](../../../README.md))
+
 ---
 
 ## 📜 Scripts disponibles
@@ -30,6 +34,8 @@ Script principal d'entraînement avec PPO.
 
 **Usage:**
 ```bash
+# Dans l'environnement Docker (http://localhost:6080)
+cd ~/workspace/ppo_no_steer
 python train_ppo.py [OPTIONS]
 ```
 
@@ -45,10 +51,10 @@ python train_ppo.py [OPTIONS]
 
 **Exemples:**
 ```bash
-# Entraînement standard
-python train_ppo.py
+# Dans l'environnement Docker
+cd ~/workspace/ppo_no_steer
 
-# Entraînement avec rollback activé
+# Entraînement standard avec rollback
 python train_ppo.py --rollback
 
 # Nouveau démarrage avec 16 environnements
@@ -83,6 +89,8 @@ Teste un modèle entraîné sur N épisodes.
 
 **Usage:**
 ```bash
+# Dans l'environnement Docker
+cd ~/workspace/ppo_no_steer
 python test_ppo.py [OPTIONS]
 ```
 
@@ -97,6 +105,9 @@ python test_ppo.py [OPTIONS]
 
 **Exemples:**
 ```bash
+# Dans l'environnement Docker
+cd ~/workspace/ppo_no_steer
+
 # Test simple (10 épisodes, pas de rendu)
 python test_ppo.py
 
@@ -800,10 +811,13 @@ models/
 ### Entraînement complet
 
 ```bash
+# Dans l'environnement Docker
+cd ~/workspace/ppo_no_steer
+
 # Entraînement standard avec rollback
 python train_ppo.py --rollback
 
-# Surveiller les métriques en temps réel
+# Surveiller les métriques en temps réel (dans un autre terminal)
 watch -n 5 tail -n 20 models/episodes_log.txt
 
 # Générer graphiques pendant entraînement
@@ -813,6 +827,9 @@ python plot_metrics.py
 ### Test et évaluation
 
 ```bash
+# Dans l'environnement Docker
+cd ~/workspace/ppo_no_steer
+
 # Test rapide sans rendu
 python test_ppo.py --num-episodes 20
 
@@ -829,6 +846,9 @@ python test_ppo.py --model models/ppo_corridor_50.pth --render
 ### Visualisation et debug
 
 ```bash
+# Dans l'environnement Docker
+cd ~/workspace/ppo_no_steer
+
 # Visualiser vision CNN
 python visualize_corridor_map.py --render
 
