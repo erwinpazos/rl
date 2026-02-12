@@ -1,0 +1,2 @@
+iteration,global_step,last_episode,num_batches,mean_return,mean_distance,mean_survival,mean_success_rate,current_phase,random_percentage,bump_ratio
+5,153600,80,4,9.849005310739548,3.672839075964356,1394.7,0.0,1,1.0,0.5

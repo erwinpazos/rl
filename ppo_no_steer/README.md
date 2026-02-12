@@ -1,6 +1,8 @@
-# PPO Final - Robot Navigation avec Vision CNN
+# PPO No Steer - Robot Navigation avec Contrôle Direct des Roues
 
 Entraînement PPO pour un robot 4 roues naviguant dans un corridor avec obstacles (bumps) et trous, utilisant une vision CNN ego-centrique.
+
+**DIFFÉRENCE AVEC ppo_final**: Contrôle DIRECT des 4 roues indépendantes au lieu d'un volant (steering + speed).
 
 ---
 
@@ -11,16 +13,18 @@ Entraînement PPO pour un robot 4 roues naviguant dans un corridor avec obstacle
 Pour la visualisation CNN avec tkinter:
 ```bash
 sudo apt update
-sudo apt install python3-tk
+sudo apt install python3-tk python3-pil.imagetk
 ```
 
 ### Packages Python
 
 ```bash
-pip install numpy torch gymnasium mujoco pyyaml matplotlib pillow
+pip install numpy torch gymnasium mujoco pyyaml matplotlib pillow python3-pil.imagetk
 ```
 
-**Note**: tkinter est inclus avec Python mais nécessite `python3-tk` au niveau système.
+**Note**: 
+- tkinter est inclus avec Python mais nécessite `python3-tk` au niveau système
+- ImageTk nécessite `python3-pil.imagetk` pour la visualisation CNN
 
 ---
 
@@ -34,7 +38,7 @@ Configuration centrale du projet. Contient tous les hyperparamètres:
 - **Training**: nombre d'environnements parallèles, steps par rollout, batch sizes
 - **Network**: architecture CNN et MLP (couches, tailles)
 - **Vision**: dimensions de la grille, cell_size, distances de vision
-- **Robot**: paramètres de contrôle (steering max, vitesse max, spawn angle)
+- **Robot**: paramètres de contrôle (spawn angle) - PAS de steering/speed car contrôle direct des roues
 - **Corridor**: longueur, largeur, distance de succès
 - **Rewards**: récompenses/pénalités pour succès, échec, progression, collision, no-progress
 - **Curriculum**: progression automatique basée sur la distance moyenne
@@ -47,6 +51,8 @@ Configuration centrale du projet. Contient tous les hyperparamètres:
 
 #### `corridor_env.py`
 Environnement Gymnasium pour le robot dans le corridor.
+
+**CONTRÔLE**: 4 actions continues (vitesses angulaires des roues) au lieu de 2 (steering + speed)
 
 **Caractéristiques:**
 - **Observation**: 

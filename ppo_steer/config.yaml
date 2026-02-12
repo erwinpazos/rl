@@ -1,0 +1,130 @@
+# Configuration PPO pour robot 4 roues avec contrôle par volant
+# ================================================================
+
+# Paramètres d'entraînement PPO
+training:
+  total_timesteps: 8000000  # Nombre total de steps d'entraînement
+  num_envs: 30             # Nombre d'environnements parallèles
+  num_steps: 1024          # Steps par rollout par environnement
+  num_minibatches: 32      # Nombre de mini-batches pour l'update
+  update_epochs: 10        # Nombre d'époques d'optimisation par update
+  seed: 1                  # Seed pour la reproductibilité
+
+# Hyperparamètres PPO
+ppo:
+  lr: 0.0004              # Learning rate
+  gamma: 0.995            # Facteur de discount (récompenses futures)
+  gae_lambda: 0.98        # Lambda pour Generalized Advantage Estimation
+  clip_coef: 0.2          # Coefficient de clipping PPO
+  ent_coef: 0.01          # Coefficient d'entropie (exploration)
+  vf_coef: 0.5            # Coefficient de la value function loss
+  max_grad_norm: 0.5      # Clipping des gradients
+
+# Paramètres de l'optimiseur Adam
+optimizer:
+  eps: 0.00001            # Epsilon pour la stabilité numérique (1e-5)
+
+# Configuration de l'environnement
+environment:
+  max_steps: 7000                                    # Steps max par épisode pour test ou si curriculum desactivé
+  use_random_corridor: true                          # true = corridors aléatoires, false = corridor fixe
+  corridor_xml: "corridor_yguel.xml"  # Fichier corridor si use_random_corridor=false
+
+# Architecture du réseau de neurones
+# Le réseau traite 3 types d'info : état robot (7 valeurs) + historique + grille de vision
+network:
+  # MLP pour l'état du robot (x,y,z,vx,vy,vz,theta → 7 valeurs fixes)
+  robot_net_hidden: [32]           # Couches cachées : 7 → 32 → 32
+  
+  # MLP pour l'historique des positions passées (anticipation)
+  history_net_hidden: [64, 32]     # Couches : history_dim → 64 → 32 → 32
+  
+  # CNN pour la grille de vision (obstacles + trous)
+  cnn_channels: [32, 64]           # Filtres : 2 canaux → 32 → 64 filtres
+  cnn_kernel_size: 3               # Taille des filtres convolutionnels (3x3)
+  cnn_stride: 2                    # Pas de convolution (réduit taille de moitié)
+  
+  # Backbone final qui combine robot + historique + vision
+  backbone_hidden: [64]            # Fusion : 128 → 64 → 64 (vers actor/critic)
+
+# Paramètres de logging et sauvegarde
+logging:
+  log_interval: 1          # Afficher métriques toutes les N itérations
+  save_interval: 5        # Sauvegarder modèle toutes les N itérations
+  render_interval: 10       # Tester visuellement toutes les N itérations : render mujoco
+  batch_size_metrics: 20   # Taille batch pour calcul métriques des logs (graphiques)
+
+# Curriculum learning - Progression graduelle de la difficulté
+curriculum:
+  enabled: true            # Activer l'apprentissage progressif
+  stabilization_steps: 20  # Steps de stabilisation au début
+  
+  # Curriculum basé sur la distance moyenne des 2 derniers batches
+  # Progression automatique quand la performance atteint les seuils
+  
+  # Phase 1: Holes only (0m → 100m)
+  # Phase 2: Bumps only (reset curriculum, 0m → 100m) 
+  # Phase 3: Both (reset curriculum, 0m → 100m)
+  
+  # Curriculum basé sur le ratio de bumps (progression des phases)
+  # Toujours 100% holes + X% bumps en plus
+  bump_ratio_schedule:
+    - phase: 1        
+      bump_ratio: 0.5
+      distance_threshold: 50 
+    - phase: 2        
+      bump_ratio: 0.65
+      distance_threshold: 60 
+    - phase: 3        
+      bump_ratio: 0.75
+      distance_threshold: 70
+    - phase: 4        
+      bump_ratio: 1.0
+      distance_threshold: null
+
+# Paramètres physiques du robot (lus automatiquement depuis le XML)
+robot:
+  max_steering_angle: 30.0  # Angle de volant max (degrés)
+  max_speed: 1.0           # Vitesse max (m/s)
+  spawn_angle_max: 30.0    # Angle de spawn max (degrés, ±60° = ±π/3 rad)
+  # wheelbase_length, track_width, wheel_radius : lus depuis four_wheel_robot.xml
+
+# Configuration de la vision ego-centrique
+vision:
+  cell_size: 0.2           # Taille d'une cellule de grille (m)
+  vision_front: 5        # Distance de vision devant le robot (m)
+  vision_behind: 2       # Distance de vision derrière le robot (m)
+  vision_left: 2         # Distance de vision à gauche (m)
+  vision_right: 2        # Distance de vision à droite (m)
+  # Grille calculée automatiquement : (5.2+0.5)/0.1 × (1.5+1.5)/0.1 = 57×30 cellules
+
+# Configuration de l'historique temporel
+history:
+  history_interval: 20     # Sauvegarder position tous les N steps
+  history_length: 8        # Nombre de positions passées à retenir
+  # Dimension calculée : 4 frames × 6 valeurs (pos+vel) = 24 valeurs
+
+# Paramètres des corridors générés
+corridor:
+  corridor_length: 200.0   # Longueur physique du corridor (m) - avec zone sûre après 100m
+  corridor_width: 3.0      # Largeur du corridor (m)
+  success_distance: 100.0  # Distance pour succès (m) - objectif à atteindre
+  cell_size_generation: 0.5  # Taille cellule pour génération - non utilisé
+
+# Système de récompenses et pénalités
+rewards:
+  # Récompenses de terminaison (épisode se termine)
+  success_reward: 50.0      # Récompense pour atteindre success_distance
+  failure_penalty: -5.0     # Pénalité pour échecs (fell, flipped)
+  
+  # Récompenses continues (à chaque step)
+  progress_multiplier: 5.0   # Multiplicateur pour progression (delta_x * multiplier)
+  collision_penalty: -0.01   # Pénalité par step de collision avec bump/wall
+  
+  # Seuils de détection
+  fell_threshold: 0.15       # Seuil de hauteur pour "fell" (robot tombe si z < seuil)
+  
+  # Terminaison pour manque de progrès
+  no_progress_check_interval: 750  # Vérifier progrès tous les N steps
+  no_progress_min_distance: 0.3    # Distance minimale requise (m)
+  no_progress_penalty: -4.0        # Pénalité si pas assez de progrès
