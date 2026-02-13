@@ -39,8 +39,8 @@ def check_and_install_display_dependencies():
         subprocess.run(['sudo', 'apt', 'install', '-y', 'python3-tk', 'python3-pil.imagetk'], check=True)
         
         # Installer via pip
-        print("Running: pip install pillow")
-        subprocess.run([sys.executable, '-m', 'pip', 'install', 'pillow'], check=True)
+        print("Running: pip install pillow --break-system-packages")
+        subprocess.run([sys.executable, '-m', 'pip', 'install', 'pillow', '--break-system-packages'], check=True)
         
         print("✓ Display dependencies installed successfully")
         return True

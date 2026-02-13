@@ -49,6 +49,7 @@ def save_checkpoint(agent, optimizer, iteration, global_step, last_episode=None,
         checkpoint['current_phase'] = curriculum_state.get('current_phase', 1)
         checkpoint['random_percentage'] = curriculum_state.get('random_percentage', 0.0)
         checkpoint['bump_ratio'] = curriculum_state.get('bump_ratio', 0.0)
+        checkpoint['phase_distance_history'] = curriculum_state.get('phase_distance_history', [])
     
     torch.save(checkpoint, checkpoint_file)
     print(f"CHECKPOINT: Saved to {checkpoint_file}")

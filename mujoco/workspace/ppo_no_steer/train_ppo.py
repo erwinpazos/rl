@@ -827,6 +827,12 @@ def train(config_path="config.yaml", rollback=False, **kwargs):
             global_step = loaded['global_step']
             last_batch_episode = loaded.get('last_episode', 0)  # Récupérer le dernier épisode
             
+            # Restaurer l'état du curriculum (phase_distance_history)
+            phase_distance_history = loaded.get('phase_distance_history', None)
+            if phase_distance_history is not None:
+                get_curriculum_state.phase_distance_history = phase_distance_history
+                print(f"   Restored curriculum phase history: {len(phase_distance_history)} phase(s) completed")
+            
             print(f"   Resuming from iteration {loaded['iteration']}, global_step {global_step:,}")
             
             # Nettoyer les fichiers temp (ils ont déjà été fusionnés au checkpoint précédent)
@@ -928,6 +934,7 @@ def train(config_path="config.yaml", rollback=False, **kwargs):
         bump_ratio = 0.5
     
     current_phase = 1  # Phase initiale
+    phase_changed_since_save = False  # Détecte un changement de phase entre 2 sauvegardes
 
     iteration = start_iteration
     while iteration <= num_iterations:
@@ -1291,6 +1298,11 @@ def train(config_path="config.yaml", rollback=False, **kwargs):
             
             random_percentage, bump_ratio, current_phase, current_distance, phase_changed = get_curriculum_state(config, temp_batch_for_curriculum)
             
+            # Tracker si un changement de phase a eu lieu depuis la dernière sauvegarde
+            if phase_changed:
+                phase_changed_since_save = True
+                print(f"  → Phase changed! Rollback protection activated until next save.")
+            
             # Log de vérification du curriculum
             print(f"\nCURRICULUM CHECK:")
             print(f"  Iteration mean distance: {iteration_mean_distance:.2f}m")
@@ -1367,53 +1379,81 @@ def train(config_path="config.yaml", rollback=False, **kwargs):
             print(f"SAVE CHECK - Iteration {iteration}")
             print(f"{'='*70}")
             
-            # Comparer distances
-            current_distance = get_mean_distance_from_temp()
-            last_distance = load_last_iteration_summary()
-            
-            print(f"Current distance: {current_distance:.2f}m" if current_distance else "Current distance: None")
-            print(f"Last saved distance: {last_distance:.2f}m" if last_distance else "Last saved distance: None (first save)")
-            
-            # Vérifier si on doit sauvegarder
-            should_save = last_distance is None or (current_distance is not None and current_distance >= last_distance)
-            
-            if not should_save:
-                print(f"\nREJECTED: Current distance ({current_distance:.2f}m) < Last saved ({last_distance:.2f}m)")
+            if rollback:
+                # Comparer distances
+                current_distance = get_mean_distance_from_temp()
+                last_distance = load_last_iteration_summary()
                 
-                if rollback:
-                    print(f"ROLLBACK: Loading last checkpoint and clearing temp data...")
+                print(f"Current distance: {current_distance:.2f}m" if current_distance else "Current distance: None")
+                print(f"Last saved distance: {last_distance:.2f}m" if last_distance else "Last saved distance: None (first save)")
+                
+                # Si un changement de phase a eu lieu, on force la sauvegarde
+                # (la chute de performance post-phase est normale et ne doit pas déclencher un rollback infini)
+                if phase_changed_since_save:
+                    print(f"PHASE CHANGE detected since last save → forcing save (bypass rollback)")
+                
+                # Vérifier si on doit sauvegarder
+                if current_distance is None:
+                    print(f"\nSKIPPED: No temp metrics available, continuing training...")
+                    print(f"{'='*70}\n")
+                    iteration += 1
+                    continue
+                
+                should_save = phase_changed_since_save or last_distance is None or current_distance >= last_distance
+                
+                if not should_save:
+                    print(f"\nREJECTED: Current distance ({current_distance:.2f}m) < Last saved ({last_distance:.2f}m)")
+                    
+
+                    print(f"ROLLBACK: Loading last checkpoint and continuing training...")
                     
                     # Charger le dernier checkpoint
-                    last_checkpoint = find_latest_checkpoint("models")
-                    if last_checkpoint:
-                        loaded = load_checkpoint(last_checkpoint, agent, optimizer, device)
-                        if loaded:
-                            # Restaurer les variables d'état
-                            iteration = loaded['iteration']
-                            global_step = loaded['global_step']
-                            total_episodes = loaded.get('last_episode', 0)
-                            
-                            # Nettoyer les temp files (données rejetées)
-                            clear_temp_metrics()
-                            if os.path.exists("models/temp_episodes_log.txt"):
-                                with open("models/temp_episodes_log.txt", 'w') as f:
-                                    pass
-                            
-                            # Recharger last_batch_num
-                            last_batch_num = get_last_batch_num()
-                            
-                            print(f"ROLLBACK: Restored to iteration {iteration}, continuing training...")
-                            print(f"{'='*70}\n")
-                            continue
+                    checkpoint_path = find_latest_checkpoint()
+                    if checkpoint_path:
+                        checkpoint = load_checkpoint(checkpoint_path, agent, optimizer, device)
+                        iteration = checkpoint['iteration']
+                        global_step = checkpoint['global_step']
+                        total_episodes = checkpoint.get('last_episode', total_episodes)
+                        
+                        # Restaurer le suivi des batches
+                        last_batch_episode = total_episodes
+                        batch_episode_returns = []
+                        batch_episode_distances = []
+                        batch_episode_steps = []
+                        batch_episode_reasons = []
+                        
+                        # Nettoyer les fichiers temp
+                        temp_metrics_path = "models/temp_training_metrics.csv"
+                        temp_episodes_path = "models/temp_episodes_log.txt"
+                        
+                        if os.path.exists(temp_metrics_path):
+                            with open(temp_metrics_path, 'w') as f:
+                                pass
+                            print(f"Cleaned temp file: {temp_metrics_path}")
+                        
+                        if os.path.exists(temp_episodes_path):
+                            with open(temp_episodes_path, 'w') as f:
+                                pass
+                            print(f"Cleaned temp file: {temp_episodes_path}")
+                        
+                        # Recharger last_batch_num
+                        last_batch_num = get_last_batch_num()
+                        
+                        print(f"Rolled back to iteration {iteration}, continuing training...")
+                        print(f"{'='*70}\n")
+                        
+                        # Continuer la boucle sans sauvegarder
+                        iteration += 1
+                        continue
                     else:
-                        print(f"WARNING: No checkpoint found for rollback, continuing anyway...")
-                else:
-                    print(f"INFO: Rollback disabled, continuing training...")
-                
-                print(f"{'='*70}\n")
-                continue
-            
+                        print(f"WARNING: No checkpoint found for rollback, continuing without save...")
+                        print(f"{'='*70}\n")
+                        iteration += 1
+                        continue
             print(f"\nACCEPTED: Saving checkpoint...")
+            
+            # Reset du flag de changement de phase après sauvegarde
+            phase_changed_since_save = False
             
             # 1. Sauvegarder iteration summary
             temp_metrics = load_temp_metrics()
@@ -1443,10 +1483,13 @@ def train(config_path="config.yaml", rollback=False, **kwargs):
             curriculum_state = None
             if temp_metrics and len(temp_metrics) > 0:
                 last_batch = temp_metrics[-1]
+                # Récupérer phase_distance_history depuis get_curriculum_state
+                phase_distance_history = getattr(get_curriculum_state, 'phase_distance_history', [])
                 curriculum_state = {
                     'current_phase': last_batch.get('current_phase', 1),
                     'random_percentage': last_batch.get('random_percentage', 0.0),
-                    'bump_ratio': last_batch.get('bump_ratio', 0.0)
+                    'bump_ratio': last_batch.get('bump_ratio', 0.0),
+                    'phase_distance_history': phase_distance_history
                 }
             
             save_checkpoint(agent, optimizer, iteration, global_step, total_episodes, 

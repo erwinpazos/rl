@@ -71,14 +71,17 @@ curriculum:
   bump_ratio_schedule:
     - phase: 1        
       bump_ratio: 0.5
-      distance_threshold: 10 
+      distance_threshold: 50 
     - phase: 2        
       bump_ratio: 0.65
-      distance_threshold: 12 
+      distance_threshold: 65 
     - phase: 3        
       bump_ratio: 0.75
-      distance_threshold: 65
+      distance_threshold: 75
     - phase: 4        
+      bump_ratio: 0.85
+      distance_threshold: 85
+    - phase: 5        
       bump_ratio: 1.0
       distance_threshold: null
 

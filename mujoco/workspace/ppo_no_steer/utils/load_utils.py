@@ -61,6 +61,7 @@ def load_checkpoint(checkpoint_path, agent, optimizer=None, device='cpu'):
         current_phase = checkpoint.get('current_phase', None)
         random_percentage = checkpoint.get('random_percentage', None)
         bump_ratio = checkpoint.get('bump_ratio', None)
+        phase_distance_history = checkpoint.get('phase_distance_history', None)
         
         print(f"RESUME: Loaded checkpoint from {checkpoint_path}")
         print(f"   Iteration: {iteration}")
@@ -91,6 +92,7 @@ def load_checkpoint(checkpoint_path, agent, optimizer=None, device='cpu'):
             'current_phase': current_phase,
             'random_percentage': random_percentage,
             'bump_ratio': bump_ratio,
+            'phase_distance_history': phase_distance_history,
             'checkpoint': checkpoint
         }
         

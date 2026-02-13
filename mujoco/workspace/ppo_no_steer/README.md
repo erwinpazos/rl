@@ -36,7 +36,7 @@ Script principal d'entraînement avec PPO.
 ```bash
 # Dans l'environnement Docker (http://localhost:6080)
 cd ~/workspace/ppo_no_steer
-python train_ppo.py [OPTIONS]
+python3 train_ppo.py [OPTIONS]
 ```
 
 **Arguments:**
@@ -55,13 +55,13 @@ python train_ppo.py [OPTIONS]
 cd ~/workspace/ppo_no_steer
 
 # Entraînement standard avec rollback
-python train_ppo.py --rollback
+python3 train_ppo.py --rollback
 
 # Nouveau démarrage avec 16 environnements
-python train_ppo.py --fresh-start --num-envs 16
+python3 train_ppo.py --fresh-start --num-envs 16
 
 # Override learning rate et seed
-python train_ppo.py --lr 0.0003 --seed 42
+python3 train_ppo.py --lr 0.0003 --seed 42
 ```
 
 **Fonctionnalités:**
@@ -91,7 +91,7 @@ Teste un modèle entraîné sur N épisodes.
 ```bash
 # Dans l'environnement Docker
 cd ~/workspace/ppo_no_steer
-python test_ppo.py [OPTIONS]
+python3 test_ppo.py [OPTIONS]
 ```
 
 **Arguments:**
@@ -109,19 +109,19 @@ python test_ppo.py [OPTIONS]
 cd ~/workspace/ppo_no_steer
 
 # Test simple (10 épisodes, pas de rendu)
-python test_ppo.py
+python3 test_ppo.py
 
 # Test avec rendu 3D et vision CNN
-python test_ppo.py --render --show-vision --num-episodes 5
+python3 test_ppo.py --render --show-vision --num-episodes 5
 
 # Test sur corridor spécifique
-python test_ppo.py --render --corridor corridor_yguel.xml
+python3 test_ppo.py --render --corridor corridor_yguel.xml
 
 # Test avec 100% de bosses
-python test_ppo.py --render --bump-ratio 1.0 --num-episodes 3
+python3 test_ppo.py --render --bump-ratio 1.0 --num-episodes 3
 
 # Test d'un checkpoint spécifique
-python test_ppo.py --model models/ppo_corridor_50.pth --render
+python3 test_ppo.py --model models/ppo_corridor_50.pth --render
 ```
 
 **Affichage:**
@@ -138,7 +138,7 @@ Visualise exactement ce que le CNN reçoit en entrée (grille 2 canaux).
 
 **Usage:**
 ```bash
-python visualize_corridor_map.py [OPTIONS]
+python3 visualize_corridor_map.py [OPTIONS]
 ```
 
 **Arguments:**
@@ -153,19 +153,19 @@ python visualize_corridor_map.py [OPTIONS]
 **Exemples:**
 ```bash
 # Visualisation avec corridor aléatoire
-python visualize_corridor_map.py
+python3 visualize_corridor_map.py
 
 # Visualisation d'un corridor spécifique
-python visualize_corridor_map.py --corridor corridor_yguel.xml
+python3 visualize_corridor_map.py --corridor corridor_yguel.xml
 
 # Position spécifique du robot
-python visualize_corridor_map.py --x 50.0 --y 0.5 --angle 15
+python3 visualize_corridor_map.py --x 50.0 --y 0.5 --angle 15
 
 # Avec rendu 3D
-python visualize_corridor_map.py --render
+python3 visualize_corridor_map.py --render
 
 # Corridor aléatoire avec seed fixe
-python visualize_corridor_map.py --seed 42 --bump-ratio 0.8
+python3 visualize_corridor_map.py --seed 42 --bump-ratio 0.8
 ```
 
 **Affichage:**
@@ -848,20 +848,80 @@ Phase 4: holes + 100% bumps
 ### Vérification à chaque itération
 
 ```
-CURRICULUM CHECK
-Iteration mean distance: 11.5m
-Current phase: 1 (threshold: 10.0m)
-✓ Distance >= threshold → Ready for next phase
+
+---
+
+## Rollback et Curriculum Learning
+
+### Système de sauvegarde avec rollback (`--rollback`)
+
+Le système de rollback permet d'**éviter les boucles infinies** lors des changements de phase du curriculum learning.
+
+**Problème sans rollback:**
+```
+Itération 15: Sauvegarde Phase 1, distance: 45m
+Itération 18: Passage Phase 2 (seuil: 50m) ✓, distance: 52m
+Itération 19-20: Légère baisse de performance (normal post-phase) → distance: 44m
+Itération 25: Distance 44m < sauvegarder (45m) → REJET, rollback à itération 15
+Itération 26+: Recommence depuis itération 15 en boucle infinie...
 ```
 
-### Rollback automatique (--rollback)
+**Solution avec rollback + phase_changed_since_save:**
 
-Si la performance régresse (distance < dernière sauvegarde):
-1. Charger le dernier checkpoint
-2. Nettoyer les fichiers temp
-3. Continuer l'entraînement
+Le système détecte un changement de phase entre deux sauvegardes via un booléen `phase_changed_since_save`:
 
-Sans `--rollback`: continue sans sauvegarder.
+1. **Lors du changement de phase**: `phase_changed_since_save = True`
+2. **Au save check**: 
+   - Si `phase_changed_since_save == True`: **Force la sauvegarde** (bypass la comparaison de distance)
+   - Traite le save comme une première sauvegarde (pas de baseline antérieure à comparer)
+3. **Après sauvegarde**: `phase_changed_since_save = False`
+
+**Flux correct:**
+```
+Itération 15: Sauvegarde Phase 1, distance: 45m
+Itération 18: Passage Phase 2 (seuil: 50m) ✓
+             → phase_changed_since_save = True
+Itération 19-20: Distance: 44m (< 45m normalement rejeté)
+             → Mais phase_changed_since_save = True
+             → FORCE la sauvegarde comme nouvelle baseline
+             → phase_changed_since_save = False
+Itération 25: Comparaison normale reprend avec baseline 44m
+```
+
+### Activation et comportement
+
+**Activation:**
+```bash
+python3 train_ppo.py --rollback
+```
+
+**Comportement:**
+- Sauvegarde tous les N itérations
+- À chaque save check, compare distance moyenne actuelle vs distance de la dernière sauvegarde
+- Si `current_distance < last_distance` ET pas de changement de phase récent:
+  - **REJET**: Rollback au checkpoint précédent
+  - Recharge modèle, optimizer, et état de l'entraînement
+  - Vide les métriques temporaires
+  - Recommence l'itération depuis le checkpoint
+- Si `current_distance >= last_distance` OU changement de phase:
+  - **ACCEPTÉ**: Sauvegarde le nouveau checkpoint
+
+**État restauré lors du rollback:**
+- Poids du modèle et optimizer state
+- Itération et global_step
+- Suivi des batches (last_batch_episode, historique des épisodes)
+- Curriculum state (phase_distance_history)
+
+### Curriculum learning progressif (4 phases)
+
+| Phase | Description | Exemple bump_ratio | Seuil distance |
+|-------|-------------|-------------------|-----------------|
+| 1 | Obstacles simples | 50% | 50m |
+| 2 | Augmentation bosses | 65% | 70m |
+| 3 | Difficulté haute | 75% | 100m |
+| 4 | Max difficulté | 100% | N/A (final) |
+
+Chaque phase augmente progressivement la difficulté (plus de bosses) une fois le seuil distance atteint.
 
 ---
 
@@ -893,7 +953,7 @@ models/
 cd ~/workspace/ppo_no_steer
 
 # Entraînement standard avec rollback
-python train_ppo.py --rollback
+python3 train_ppo.py --rollback
 
 ```
 
@@ -904,16 +964,16 @@ python train_ppo.py --rollback
 cd ~/workspace/ppo_no_steer
 
 # Test rapide sans rendu
-python test_ppo.py --num-episodes 20
+python3 test_ppo.py --num-episodes 20
 
 # Test avec visualisation complète
-python test_ppo.py --render --show-vision --num-episodes 5
+python3 test_ppo.py --render --show-vision --num-episodes 5
 
 # Test sur corridor difficile
-python test_ppo.py --render --bump-ratio 1.0 --num-episodes 10
+python3 test_ppo.py --render --bump-ratio 1.0 --num-episodes 10
 
 # Test checkpoint spécifique
-python test_ppo.py --model models/ppo_corridor_50.pth --render
+python3 test_ppo.py --model models/ppo_corridor_50.pth --render
 ```
 
 ### Visualisation et debug
@@ -923,13 +983,13 @@ python test_ppo.py --model models/ppo_corridor_50.pth --render
 cd ~/workspace/ppo_no_steer
 
 # Visualiser vision CNN
-python visualize_corridor_map.py --render
+python3 visualize_corridor_map.py --render
 
 # Position spécifique
-python visualize_corridor_map.py --x 50 --y 0.5 --angle 15
+python3 visualize_corridor_map.py --x 50 --y 0.5 --angle 15
 
 # Corridor avec seed fixe
-python visualize_corridor_map.py --seed 42 --bump-ratio 0.8
+python3 visualize_corridor_map.py --seed 42 --bump-ratio 0.8
 ```
 
 ---

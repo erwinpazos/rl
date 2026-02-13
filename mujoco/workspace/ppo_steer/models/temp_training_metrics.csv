@@ -1,0 +1,2 @@
+batch_num,episode_end,episodes_range,global_step,mean_return,mean_distance,mean_survival,success_rate,current_phase,random_percentage,bump_ratio
+86,1738,1719-1738,4823040,444.4434580542781,83.01459806691199,4650.75,70.0,4,1.0,1.0
