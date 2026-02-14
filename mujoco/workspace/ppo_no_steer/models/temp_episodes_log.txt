@@ -1,5 +1,7 @@
-Episode   1467 | Return:   105.4 | Distance:  22.83m | Steps: 1377 | flipped
-Episode   1468 | Return:    18.0 | Distance:   5.36m | Steps:  419 | flipped
-Episode   1469 | Return:    78.7 | Distance:  17.60m | Steps: 1277 | fell
-Episode   1470 | Return:    44.2 | Distance:  10.60m | Steps:  346 | fell
-Episode   1471 | Return:   252.2 | Distance:  52.34m | Steps: 3283 | flipped
+Episode   2062 | Return:   546.2 | Distance: 100.03m | Steps: 3862 | success
+Episode   2063 | Return:    74.0 | Distance:  16.62m | Steps:  764 | fell
+Episode   2064 | Return:   362.1 | Distance:  74.22m | Steps: 2931 | flipped
+Episode   2065 | Return:   546.1 | Distance: 100.01m | Steps: 3584 | success
+Episode   2066 | Return:    42.1 | Distance:  10.17m | Steps:  370 | flipped
+Episode   2067 | Return:   196.9 | Distance:  41.20m | Steps: 1837 | fell
+Episode   2068 | Return:    64.3 | Distance:  14.65m | Steps:  573 | fell
