@@ -1,56 +1,56 @@
 # PPO Robot Navigation - Corridor Environment
 
-Entraînement d'un robot à 4 roues pour naviguer dans un corridor avec obstacles (trous et bosses) en utilisant l'algorithme PPO (Proximal Policy Optimization).
+Training a 4-wheel robot to navigate a corridor with obstacles (holes and bumps) using the PPO (Proximal Policy Optimization) algorithm.
 
-Ce projet utilise Docker avec support GPU NVIDIA pour l'entraînement et MuJoCo pour la simulation physique.
+This project uses Docker with NVIDIA GPU support for training and MuJoCo for physical simulation.
 
-## Table des matières
+## Table of Contents
 
-- [Prérequis](#prérequis)
+- [Prerequisites](#prerequisites)
 - [Installation](#installation)
-- [Structure du projet](#structure-du-projet)
-- [Lancement de l'environnement](#lancement-de-lenvironnement)
-- [Utilisation rapide](#utilisation-rapide)
-- [Différences entre ppo_no_steer et ppo_steer](#différences-entre-ppo_no_steer-et-ppo_steer)
+- [Project Structure](#project-structure)
+- [Launching the Environment](#launching-the-environment)
+- [Quick Start](#quick-start)
+- [Differences between ppo_no_steer and ppo_steer](#differences-between-ppo_no_steer-and-ppo_steer)
 
 ---
 
-## Prérequis (l'un ou l'autre)
+## Prerequisites (either one)
 
 ### Windows
 
-- Windows 10/11 (version 21H2 ou supérieure)
-- GPU NVIDIA avec drivers installés (recommandé pour l'entraînement)
-- 8 GB RAM minimum (16 GB recommandé)
+- Windows 10/11 (version 21H2 or higher)
+- NVIDIA GPU with drivers installed (recommended for training)
+- 8 GB RAM minimum (16 GB recommended)
 - WSL2 (Windows Subsystem for Linux)
 - Docker Desktop
 
 ### Linux
 
-- Ubuntu 20.04+ ou distribution compatible
-- GPU NVIDIA avec drivers installés (recommandé)
-- 8 GB RAM minimum (16 GB recommandé)
-- Docker avec support GPU (NVIDIA Container Toolkit)
+- Ubuntu 20.04+ or compatible distribution
+- NVIDIA GPU with drivers installed (recommended)
+- 8 GB RAM minimum (16 GB recommended)
+- Docker with GPU support (NVIDIA Container Toolkit)
 
 ---
 
 ## Installation
 
-### 1. Cloner le dépôt
+### 1. Clone the Repository
 
-Le dépôt doit être cloné dans un dossier spécifique selon votre système d'exploitation:
+The repository should be cloned in a specific folder according to your operating system:
 
-**Windows (dans PowerShell):**
+**Windows (in PowerShell):**
 ```powershell
-# Emplacement: C:\Users\VOTRE_USERNAME
+# Location: C:\Users\YOUR_USERNAME
 ```
 
 **Linux / WSL:**
 ```bash
-# Emplacement: /home/VOTRE_USERNAME
+# Location: /home/YOUR_USERNAME
 ```
 
-**Cloner le dépôt:**
+**Clone the repository:**
 ```bash
 cd $env:USERPROFILE
 git clone https://github.com/erwinpazos/rl.git .
@@ -60,42 +60,42 @@ cd ~
 git clone https://github.com/erwinpazos/rl.git .
 ```
 
-Le dépôt contient:
-- `launch_scripts/`: Scripts de lancement Docker (start.bat, start.sh)
-- `mujoco/workspace/`: Code source du projet (ppo_no_steer, ppo_steer, etc.)
+The repository contains:
+- `launch_scripts/`: Docker launch scripts (start.bat, start.sh)
+- `mujoco/workspace/`: Project source code (ppo_no_steer, ppo_steer, etc.)
 
-### 2. Installer WSL2 et Docker
+### 2. Install WSL2 and Docker
 
 #### Windows
 
-**Pour l'installation complète de WSL2, Docker Desktop et la configuration GPU sur Windows, voir:**
+**For complete WSL2, Docker Desktop installation and GPU configuration on Windows, see:**
 
-📖 **[Guide d'installation Windows complet dans launch_scripts/README.md](launch_scripts/README.md)**
+📖 **[Complete Windows Installation Guide in launch_scripts/README.md](launch_scripts/README.md)**
 
-Ce guide contient:
-- Installation WSL2
-- Installation Docker Desktop
-- Configuration Docker pour WSL2
-- Vérification GPU
-- Troubleshooting Windows
+This guide contains:
+- WSL2 Installation
+- Docker Desktop Installation
+- Docker Configuration for WSL2
+- GPU Verification
+- Windows Troubleshooting
 
 #### Linux
 
-**Installer Docker:**
+**Install Docker:**
 ```bash
-# Installer Docker
+# Install Docker
 curl -fsSL https://get.docker.com -o get-docker.sh
 sudo sh get-docker.sh
 
-# Ajouter votre utilisateur au groupe docker
+# Add your user to the docker group
 sudo usermod -aG docker $USER
 
-# Se déconnecter et reconnecter pour appliquer les changements de groupe
+# Log out and log back in to apply group changes
 ```
 
-**Installer NVIDIA Container Toolkit (pour GPU):**
+**Install NVIDIA Container Toolkit (for GPU):**
 ```bash
-# Ajouter le repository NVIDIA
+# Add NVIDIA repository
 curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
   sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
 
@@ -103,18 +103,18 @@ curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-contai
   sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
   sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
 
-# Installer le toolkit
+# Install the toolkit
 sudo apt-get update
 sudo apt-get install -y nvidia-container-toolkit
 
-# Configurer Docker pour utiliser le GPU
+# Configure Docker to use the GPU
 sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
 ```
 
-### 3. Vérifier l'installation GPU
+### 3. Verify GPU Installation
 
-**Windows (dans WSL):**
+**Windows (in WSL):**
 ```bash
 wsl
 nvidia-smi
@@ -125,205 +125,205 @@ nvidia-smi
 nvidia-smi
 ```
 
-Vous devriez voir les informations de votre GPU NVIDIA.
+You should see your NVIDIA GPU information.
 
-**Tester Docker avec GPU:**
+**Test Docker with GPU:**
 ```bash
 docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
 ```
 
 ---
 
-## Structure du projet
+## Project Structure
 
 ```
-rl/                                    # Dossier racine (créé par les scripts)
-├── launch_scripts/                    # Scripts de lancement
-│   ├── start.bat                      # Lancement Windows
-│   ├── start.sh                       # Lancement Linux/WSL
-│   ├── README.md                      # Documentation détaillée Docker
-│   └── *.png                          # Images documentation
+rl/                                    # Root folder (created by scripts)
+├── launch_scripts/                    # Launch scripts
+│   ├── start.bat                      # Windows launch
+│   ├── start.sh                       # Linux/WSL launch
+│   ├── README.md                      # Detailed Docker documentation
+│   └── *.png                          # Documentation images
 │
-└── mujoco/                            # Environnement MuJoCo
-    └── workspace/                     # Code source (partagé avec Docker)
-        ├── README.md                  # Ce fichier
+└── mujoco/                            # MuJoCo environment
+    └── workspace/                     # Source code (shared with Docker)
+        ├── README.md                  # This file
         │
-        ├── ppo_no_steer/              # Version 4 roues indépendantes
-        │   ├── README.md              # Documentation détaillée
-        │   ├── config.yaml            # Configuration complète
-        │   ├── train_ppo.py           # Script d'entraînement
-        │   ├── test_ppo.py            # Script de test
-        │   ├── corridor_env.py        # Environnement Gymnasium
-        │   ├── *.xml                  # Modèles MuJoCo
-        │   ├── models/                # Checkpoints et métriques
-        │   └── utils/                 # Modules utilitaires
+        ├── ppo_no_steer/              # 4 independent wheels version
+        │   ├── README.md              # Detailed documentation
+        │   ├── config.yaml            # Complete configuration
+        │   ├── train_ppo.py           # Training script
+        │   ├── test_ppo.py            # Test script
+        │   ├── corridor_env.py        # Gymnasium environment
+        │   ├── *.xml                  # MuJoCo models
+        │   ├── models/                # Checkpoints and metrics
+        │   └── utils/                 # Utility modules
         │
-        ├── ppo_steer/                 # Version contrôle par volant
-        │   ├── README.md              # Documentation détaillée
-        │   ├── config.yaml            # Configuration complète
-        │   ├── train_ppo.py           # Script d'entraînement
-        │   ├── test_ppo.py            # Script de test
-        │   ├── corridor_env.py        # Environnement Gymnasium (steering)
-        │   ├── *.xml                  # Modèles MuJoCo
-        │   ├── models/                # Checkpoints et métriques
-        │   └── utils/                 # Modules utilitaires
+        ├── ppo_steer/                 # Steering control version
+        │   ├── README.md              # Detailed documentation
+        │   ├── config.yaml            # Complete configuration
+        │   ├── train_ppo.py           # Training script
+        │   ├── test_ppo.py            # Test script
+        │   ├── corridor_env.py        # Gymnasium environment (steering)
+        │   ├── *.xml                  # MuJoCo models
+        │   ├── models/                # Checkpoints and metrics
+        │   └── utils/                 # Utility modules
         │
-        ├── ppo_final/                 # Version finale (référence)
-        ├── corridor_creation/         # Outils de création de corridors
-        └── notebooks/                 # Notebooks d'expérimentation
+        ├── ppo_final/                 # Final version (reference)
+        ├── corridor_creation/         # Corridor creation tools
+        └── notebooks/                 # Experimentation notebooks
 ```
 
 ---
 
-## Lancement de l'environnement
+## Launching the Environment
 
-Le projet utilise Docker pour fournir un environnement complet avec:
-- MuJoCo Desktop (interface graphique via noVNC)
+The project uses Docker to provide a complete environment with:
+- MuJoCo Desktop (graphical interface via noVNC)
 - Jupyter Notebook
-- Support GPU CUDA pour PyTorch
-- Tous les packages Python nécessaires
+- CUDA GPU support for PyTorch
+- All necessary Python packages
 
-### Option 1: Lancement via WSL (Windows)
+### Option 1: Launch via WSL (Windows)
 
-**Avantages:**
-- ✅ GPU CUDA fonctionnel (PyTorch/TensorFlow)
-- ✅ Jupyter fonctionne correctement
-- ✅ Performance optimale pour l'entraînement
+**Advantages:**
+- ✅ Functional CUDA GPU (PyTorch/TensorFlow)
+- ✅ Jupyter works correctly
+- ✅ Optimal performance for training
 
-**Lancement:**
+**Launch:**
 ```powershell
-# Dans PowerShell
+# In PowerShell
 wsl
 
-# Dans WSL
+# In WSL
 cd ~/rl/launch_scripts
 ./start.sh
 ```
 
-**Dossier partagé:**
+**Shared folder:**
 ```
-Linux (WSL): /home/VOTRE_USERNAME/rl/mujoco/workspace
+Linux (WSL): /home/YOUR_USERNAME/rl/mujoco/workspace
 Docker:      /home/student/workspace
-Windows:     \\wsl.localhost\Ubuntu\home\VOTRE_USERNAME\rl\mujoco\workspace
+Windows:     \\wsl.localhost\Ubuntu\home\YOUR_USERNAME\rl\mujoco\workspace
 ```
 
-### Option 2: Lancement direct depuis Windows
+### Option 2: Direct launch from Windows
 
-**Avantages:**
-- ✅ Simple, un double-clic sur start.bat
-- ✅ Dossier Windows natif (facile d'accès)
+**Advantages:**
+- ✅ Simple, double-click on start.bat
+- ✅ Native Windows folder (easy to access)
 
-**Inconvénients:**
-- ⚠️ GPU CUDA peut ne pas fonctionner
-- ⚠️ Jupyter peut avoir des problèmes
+**Disadvantages:**
+- ⚠️ CUDA GPU may not work
+- ⚠️ Jupyter may have issues
 
-**Lancement:**
+**Launch:**
 ```powershell
-# Double-cliquer sur start.bat ou dans PowerShell:
-cd C:\Users\VOTRE_USERNAME\rl\launch_scripts
+# Double-click on start.bat or in PowerShell:
+cd C:\Users\YOUR_USERNAME\rl\launch_scripts
 .\start.bat
 ```
 
-**Dossier partagé:**
+**Shared folder:**
 ```
-Windows: C:\Users\VOTRE_USERNAME\rl\mujoco\workspace
+Windows: C:\Users\YOUR_USERNAME\rl\mujoco\workspace
 Docker:  /home/student/workspace
 ```
 
-### Option 3: Lancement Linux natif
+### Option 3: Native Linux launch
 
-**Lancement:**
+**Launch:**
 ```bash
 cd ~/rl/launch_scripts
 ./start.sh
 ```
 
-**Dossier partagé:**
+**Shared folder:**
 ```
-Linux:  /home/VOTRE_USERNAME/rl/mujoco/workspace
+Linux:  /home/YOUR_USERNAME/rl/mujoco/workspace
 Docker: /home/student/workspace
 ```
 
-### Options de lancement
+### Launch Options
 
 ```bash
-# Résolution personnalisée
+# Custom resolution
 ./start.sh --resolution 2560x1440
 
-# Mode économie de RAM
+# RAM saving mode
 ./start.sh --small_ram
 
-# RAM personnalisée
+# Custom RAM
 ./start.sh --ram 2g
 
-# Qualité d'affichage
-./start.sh --quality medium  # ou low
+# Display quality
+./start.sh --quality medium  # or low
 
-# Mode local (sans vérifier les mises à jour)
+# Local mode (without checking updates)
 ./start.sh --local
 
-# Sans GPU (forcer software rendering)
+# Without GPU (force software rendering)
 ./start.sh --no_gpu
 ```
 
-### Accès à l'environnement
+### Accessing the Environment
 
-Une fois lancé, ouvrir dans votre navigateur:
+Once launched, open in your browser:
 
 - **Desktop noVNC**: http://localhost:6080
 - **Jupyter Notebook**: http://localhost:8888
 
-### Arrêter l'environnement
+### Stopping the Environment
 
-Dans le terminal où l'environnement tourne:
+In the terminal where the environment is running:
 ```
 Ctrl+C
 ```
 
 ---
 
-## Utilisation rapide
+## Quick Start
 
-### Dans l'environnement Docker
+### In the Docker Environment
 
-Une fois l'environnement lancé (voir section précédente), accéder au Desktop via http://localhost:6080
+Once the environment is launched (see previous section), access the Desktop via http://localhost:6080
 
-### Choisir une version
+### Choose a Version
 
-Le projet propose deux versions avec des méthodes de contrôle différentes:
+The project offers two versions with different control methods:
 
-#### ppo_no_steer - Contrôle 4 roues indépendantes
+#### ppo_no_steer - 4 Independent Wheels Control
 - Action space: 4 dimensions `[wheel_FL, wheel_FR, wheel_RL, wheel_RR]`
-- Contrôle direct de chaque roue
-- Plus de liberté mais plus difficile à apprendre
+- Direct control of each wheel
+- More freedom but harder to learn
 
-📖 **[Documentation complète: mujoco/workspace/ppo_no_steer/README.md](mujoco/workspace/ppo_no_steer/README.md)**
+📖 **[Complete documentation: mujoco/workspace/ppo_no_steer/README.md](mujoco/workspace/ppo_no_steer/README.md)**
 
-#### ppo_steer - Contrôle par volant et vitesse
+#### ppo_steer - Steering Angle and Speed Control
 - Action space: 2 dimensions `[steering_angle, speed]`
-- Contrôle comme une voiture (plus naturel)
-- Plus simple à apprendre
+- Control like a car (more natural)
+- Simpler to learn
 
-📖 **[Documentation complète: mujoco/workspace/ppo_steer/README.md](mujoco/workspace/ppo_steer/README.md)**
+📖 **[Complete documentation: mujoco/workspace/ppo_steer/README.md](mujoco/workspace/ppo_steer/README.md)**
 
-### Éditer les fichiers
+### Edit Files
 
-**Depuis Windows:**
-- Via WSL: `\\wsl.localhost\Ubuntu\home\VOTRE_USERNAME\rl\mujoco\workspace`
-- Via Windows: `C:\Users\VOTRE_USERNAME\rl\mujoco\workspace` (si lancé avec start.bat)
+**From Windows:**
+- Via WSL: `\\wsl.localhost\Ubuntu\home\YOUR_USERNAME\rl\mujoco\workspace`
+- Via Windows: `C:\Users\YOUR_USERNAME\rl\mujoco\workspace` (if launched with start.bat)
 
-**Depuis Linux:**
+**From Linux:**
 - `~/rl/mujoco/workspace`
 
-**Avec VSCode:**
-- Ouvrir le dossier workspace directement
-- Les modifications sont synchronisées en temps réel avec Docker
+**With VSCode:**
+- Open the workspace folder directly
+- Changes are synchronized in real-time with Docker
 
 ---
 
-## Vérifier le support GPU
+## Verify GPU Support
 
-Dans Jupyter (http://localhost:8888) ou dans le terminal Docker:
+In Jupyter (http://localhost:8888) or in the Docker terminal:
 
 ```python
 import torch
@@ -338,7 +338,7 @@ else:
     print("No GPU available - training will be slower")
 ```
 
-Résultat attendu avec GPU:
+Expected result with GPU:
 ```
 Device: cuda:0
 GPU: NVIDIA GeForce RTX 4090
@@ -347,139 +347,139 @@ CUDA Version: 12.x
 
 ---
 
-## Comparaison des méthodes de lancement
+## Comparison of Launch Methods
 
-| Critère | WSL (start.sh) | Windows (start.bat) | Linux (start.sh) |
-|---------|----------------|---------------------|------------------|
-| GPU CUDA | ✅ Fonctionne | ❌ Peut échouer | ✅ Fonctionne |
-| Jupyter | ✅ Fonctionne | ⚠️ Problèmes possibles | ✅ Fonctionne |
-| Dossier partagé | `/home/USERNAME/rl/...` | `C:\Users\USERNAME\rl\...` | `/home/USERNAME/rl/...` |
-| Simplicité | ⚠️ Terminal WSL | ✅ Double-clic | ✅ Terminal |
-| Performance | ✅ Optimale | ⚠️ Moyenne | ✅ Optimale |
-| Recommandé pour | Entraînement GPU | Tests rapides | Entraînement GPU |
-
----
-
-## Objectif
-
-Le robot doit apprendre à naviguer dans un corridor de 100m avec:
-- **Trous** (holes): Zones à éviter (chute = échec)
-- **Bosses** (bumps): Obstacles qui ralentissent et pénalisent
-- **Murs latéraux**: Limites du corridor (3m de large)
-
-Le robot utilise:
-- **Vision ego-centrique**: Grille CNN 2 canaux (obstacles, trous)
-- **Historique de positions**: 8 frames passées pour anticipation
-- **État du robot**: Position, vitesse, orientation
+| Criteria | WSL (start.sh) | Windows (start.bat) | Linux (start.sh) |
+|----------|----------------|---------------------|------------------|
+| CUDA GPU | ✅ Works | ❌ May fail | ✅ Works |
+| Jupyter | ✅ Works | ⚠️ Possible issues | ✅ Works |
+| Shared folder | `/home/USERNAME/rl/...` | `C:\Users\USERNAME\rl\...` | `/home/USERNAME/rl/...` |
+| Simplicity | ⚠️ WSL terminal | ✅ Double-click | ✅ Terminal |
+| Performance | ✅ Optimal | ⚠️ Average | ✅ Optimal |
+| Recommended for | GPU training | Quick tests | GPU training |
 
 ---
 
-## Métriques d'entraînement
+## Objective
 
-Les métriques suivantes sont trackées:
-- **Return moyen**: Récompense cumulée par épisode
-- **Distance moyenne**: Distance parcourue (objectif: 100m)
-- **Taux de succès**: % d'épisodes atteignant 100m
-- **Survie moyenne**: Nombre de steps avant terminaison
-- **Raisons de terminaison**: fell, flipped, no_progress, success
+The robot must learn to navigate a 100m corridor with:
+- **Holes**: Areas to avoid (falling = failure)
+- **Bumps**: Obstacles that slow down and penalize
+- **Lateral walls**: Corridor limits (3m wide)
+
+The robot uses:
+- **Ego-centric vision**: 2-channel CNN grid (obstacles, holes)
+- **Position history**: 8 past frames for anticipation
+- **Robot state**: Position, velocity, orientation
+
+---
+
+## Training Metrics
+
+The following metrics are tracked:
+- **Average return**: Cumulative reward per episode
+- **Average distance**: Distance traveled (objective: 100m)
+- **Success rate**: % of episodes reaching 100m
+- **Average survival**: Number of steps before termination
+- **Termination reasons**: fell, flipped, no_progress, success
 
 ---
 
 ## Curriculum Learning
 
-L'entraînement utilise un curriculum progressif:
+Training uses a progressive curriculum:
 
-1. **Phase 1**: Trous + 50% bosses (seuil: 10m)
-2. **Phase 2**: Trous + 65% bosses (seuil: 12m)
-3. **Phase 3**: Trous + 75% bosses (seuil: 65m)
-4. **Phase 4**: Trous + 100% bosses (pas de seuil)
+1. **Phase 1**: Holes + 50% bumps (threshold: 10m)
+2. **Phase 2**: Holes + 65% bumps (threshold: 12m)
+3. **Phase 3**: Holes + 75% bumps (threshold: 65m)
+4. **Phase 4**: Holes + 100% bumps (no threshold)
 
-Le passage à la phase suivante se fait automatiquement quand la distance moyenne de l'itération dépasse le seuil.
+Progression to the next phase happens automatically when the average distance of the iteration exceeds the threshold.
 
 ---
 
 ## Configuration
 
-Tous les paramètres sont configurables via `config.yaml` dans chaque dossier (ppo_no_steer, ppo_steer):
-- Hyperparamètres PPO (learning rate, gamma, etc.)
-- Architecture du réseau (CNN, MLP)
-- Paramètres d'environnement (max_steps, vision)
-- Curriculum learning (phases, seuils)
-- Système de récompenses
+All parameters are configurable via `config.yaml` in each folder (ppo_no_steer, ppo_steer):
+- PPO hyperparameters (learning rate, gamma, etc.)
+- Network architecture (CNN, MLP)
+- Environment parameters (max_steps, vision)
+- Curriculum learning (phases, thresholds)
+- Reward system
 
-Voir les READMEs spécifiques pour plus de détails.
+See specific READMEs for more details.
 
 ---
 
 ## Troubleshooting
 
-### Docker ne démarre pas
+### Docker won't start
 
 **Windows:**
-- Vérifier que WSL2 est installé: `wsl --status`
-- Vérifier que Docker Desktop est lancé
-- Vérifier l'intégration WSL2 dans Docker Desktop Settings
+- Verify WSL2 is installed: `wsl --status`
+- Verify Docker Desktop is running
+- Check WSL2 integration in Docker Desktop Settings
 
 **Linux:**
-- Vérifier que Docker est lancé: `sudo systemctl status docker`
-- Vérifier que vous êtes dans le groupe docker: `groups`
-- Si non: `sudo usermod -aG docker $USER` puis se déconnecter/reconnecter
+- Verify Docker is running: `sudo systemctl status docker`
+- Verify you're in the docker group: `groups`
+- If not: `sudo usermod -aG docker $USER` then log out/in
 
-### GPU non détecté
+### GPU not detected
 
-**Vérifier le driver NVIDIA:**
+**Check NVIDIA driver:**
 ```bash
 nvidia-smi
 ```
 
-**Vérifier Docker GPU support:**
+**Check Docker GPU support:**
 ```bash
 docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
 ```
 
-**Si ça ne fonctionne pas:**
-- Installer NVIDIA Container Toolkit (voir section Installation)
-- Redémarrer Docker: `sudo systemctl restart docker`
-- Utiliser `./start.sh` depuis WSL (pas start.bat)
+**If it doesn't work:**
+- Install NVIDIA Container Toolkit (see Installation section)
+- Restart Docker: `sudo systemctl restart docker`
+- Use `./start.sh` from WSL (not start.bat)
 
-### Jupyter ne démarre pas
+### Jupyter won't start
 
-- Utiliser `./start.sh` depuis WSL au lieu de `start.bat`
-- Vérifier les logs Docker
-- Essayer avec `--small_ram` si peu de mémoire
+- Use `./start.sh` from WSL instead of `start.bat`
+- Check Docker logs
+- Try with `--small_ram` if low on memory
 
-### Fichiers non synchronisés
+### Files not synchronized
 
-- Vérifier que vous éditez dans le bon dossier
+- Verify you're editing in the correct folder
 - WSL: `\\wsl.localhost\Ubuntu\home\USERNAME\rl\mujoco\workspace`
 - Windows: `C:\Users\USERNAME\rl\mujoco\workspace`
-- Les modifications doivent apparaître immédiatement dans Docker
+- Changes should appear immediately in Docker
 
-### Performance lente
+### Slow performance
 
-- Vérifier que le GPU est bien utilisé (voir section "Vérifier le support GPU")
-- Réduire `num_envs` dans config.yaml si manque de RAM
-- Utiliser `--small_ram` au lancement
-- Fermer les applications gourmandes en ressources
-
----
-
-## Notes importantes
-
-- Le dossier `rl/` est créé automatiquement par les scripts de lancement (va utiliser votre dossier rl cloné)
-- Les checkpoints et métriques sont sauvegardés dans `models/` de chaque projet
-- Les modifications de fichiers sont synchronisées en temps réel avec Docker
-- Le GPU CUDA est essentiel pour un entraînement rapide (CPU = très lent)
-- WSL2 + start.sh est la méthode recommandée sur Windows pour le GPU
+- Verify GPU is being used (see "Verify GPU Support" section)
+- Reduce `num_envs` in config.yaml if low on RAM
+- Use `--small_ram` when launching
+- Close resource-heavy applications
 
 ---
 
-## Licence
+## Important Notes
+
+- The `rl/` folder is created automatically by the launch scripts (will use your cloned rl folder)
+- Checkpoints and metrics are saved in `models/` of each project
+- File changes are synchronized in real-time with Docker
+- CUDA GPU is essential for fast training (CPU = very slow)
+- WSL2 + start.sh is the recommended method on Windows for GPU
+
+---
+
+## License
 
 MIT
 
 ---
 
-## 👥 Auteurs
+## 👥 Authors
 
 Erwin PAZOS

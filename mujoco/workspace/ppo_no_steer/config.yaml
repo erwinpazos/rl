@@ -50,7 +50,7 @@ network:
 # Paramètres de logging et sauvegarde
 logging:
   log_interval: 1          # Afficher métriques toutes les N itérations
-  save_interval: 5        # Sauvegarder modèle toutes les N itérations
+  save_interval: 1        # Sauvegarder modèle toutes les N itérations
   render_interval: 10       # Tester visuellement toutes les N itérations : render mujoco
   batch_size_metrics: 20   # Taille batch pour calcul métriques des logs (graphiques)
 
