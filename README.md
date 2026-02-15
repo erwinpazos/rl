@@ -351,7 +351,7 @@ CUDA Version: 12.x
 
 | Criteria | WSL (start.sh) | Windows (start.bat) | Linux (start.sh) |
 |----------|----------------|---------------------|------------------|
-| CUDA GPU | ✅ Works | ❌ May fail | ✅ Works |
+| CUDA GPU | ✅ Works | ✅ Works | ✅ Works |
 | Jupyter | ✅ Works | ⚠️ Possible issues | ✅ Works |
 | Shared folder | `/home/USERNAME/rl/...` | `C:\Users\USERNAME\rl\...` | `/home/USERNAME/rl/...` |
 | Simplicity | ⚠️ WSL terminal | ✅ Double-click | ✅ Terminal |
