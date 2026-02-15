@@ -482,4 +482,6 @@ MIT
 
 ## 👥 Authors
 
-Erwin PAZOS
+**Erwin PAZOS** - [GitHub](https://github.com/erwinpazos)
+
+**Docker Image** provided by [Manuel Yguel](https://github.com/yguel)
