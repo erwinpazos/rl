@@ -1,216 +1,216 @@
-# MuJoCo Desktop Environment avec GPU NVIDIA
+# MuJoCo Desktop Environment with NVIDIA GPU
 
-Guide d'installation et d'utilisation de l'environnement MuJoCo avec support GPU pour l'apprentissage par renforcement.
+Installation and usage guide for MuJoCo environment with GPU support for reinforcement learning.
 
 
-## Prérequis
+## Prerequisites
 
-- Windows 10/11 (version 21H2 ou supérieure)
-- GPU NVIDIA avec drivers installés
-- 8 GB RAM minimum (16 GB recommandé)
+- Windows 10/11 (version 21H2 or higher)
+- NVIDIA GPU with drivers installed
+- 8 GB RAM minimum (16 GB recommended)
 
 ## Installation
 
-### 1. Installer WSL2 (Windows Subsystem for Linux)
+### 1. Install WSL2 (Windows Subsystem for Linux)
 
-**Important** : WSL2 doit être installé **avant** Docker Desktop.
+**Important**: WSL2 must be installed **before** Docker Desktop.
 
-Ouvrir **PowerShell en administrateur** et exécuter :
+Open **PowerShell as administrator** and run:
 
 ```powershell
 wsl --install
 wsl --update
 ```
 
-Redémarrer l'ordinateur si demandé.
+Restart your computer if prompted.
 
-### 2. Premier lancement de WSL
+### 2. First WSL Launch
 
-Dans PowerShell (pas besoin d'admin) :
+In PowerShell (no admin needed):
 
 ```powershell
 wsl
 ```
 
-Au premier lancement, WSL vous demandera :
-- Un **nom d'utilisateur**
-- Un **mot de passe** (à retenir !)
+On first launch, WSL will ask for:
+- A **username**
+- A **password** (remember it!)
 
-### 3. Installer Docker Desktop
+### 3. Install Docker Desktop
 
-1. Télécharger Docker Desktop pour Windows : https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe
-2. Exécuter l'installateur `.exe`
-3. Suivre les instructions d'installation (Docker détectera automatiquement WSL2)
-4. Redémarrer l'ordinateur si demandé
-5. Lancer Docker Desktop
+1. Download Docker Desktop for Windows: https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe
+2. Run the `.exe` installer
+3. Follow installation instructions (Docker will automatically detect WSL2)
+4. Restart your computer if prompted
+5. Launch Docker Desktop
 
-### 4. Configurer Docker Desktop pour WSL2
+### 4. Configure Docker Desktop for WSL2
 
-1. Ouvrir **Docker Desktop**
+1. Open **Docker Desktop**
 
-2. **Vérifier l'intégration WSL2 dans General :**
-   - Aller dans **Settings → General**
-   - Vérifier que **"Use the WSL 2 based engine"** est coché
+2. **Check WSL2 integration in General:**
+   - Go to **Settings → General**
+   - Verify that **"Use the WSL 2 based engine"** is checked
    
-   ![Configuration General](general.png)
+   ![General Configuration](general.png)
 
-3. **Activer l'intégration avec votre distribution WSL :**
-   - Aller dans **Settings → Resources → WSL Integration**
-   - Activer :
+3. **Enable integration with your WSL distribution:**
+   - Go to **Settings → Resources → WSL Integration**
+   - Enable:
      - ✅ "Enable integration with my default WSL distro"
-     - ✅ Votre distribution Ubuntu (ou le nom de votre distro)
+     - ✅ Your Ubuntu distribution (or your distro name)
    
-   ![Configuration Resources](ressources.png)
+   ![Resources Configuration](ressources.png)
 
-4. Cliquer sur **"Apply & Restart"**
+4. Click **"Apply & Restart"**
 
-5. **Vérifier que l'intégration est bien active** après le redémarrage :
-   - Retourner dans **Settings → Resources → WSL Integration**
-   - Confirmer que les cases sont toujours cochées
+5. **Verify integration is active** after restart:
+   - Return to **Settings → Resources → WSL Integration**
+   - Confirm checkboxes are still checked
 
-### 4. Vérifier l'installation GPU dans WSL
+### 4. Verify GPU Installation in WSL
 
-Dans WSL (taper `wsl` dans PowerShell) :
+In WSL (type `wsl` in PowerShell):
 
 ```bash
 nvidia-smi
 ```
 
-Vous devriez voir les informations de votre GPU NVIDIA.
+You should see your NVIDIA GPU information.
 
-Sinon installer les drivers :
+If not, install drivers:
 
 https://www.nvidia.com/en-us/drivers/
 
-Tester Docker avec GPU :
+Test Docker with GPU:
 
 ```bash
 docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
 ```
 
 
-## Lancement de l'environnement
+## Launching the Environment
 
 ---
 
-## PARTIE 1 : Lancement via WSL (Recommandé pour GPU)
+## PART 1: Launch via WSL (Recommended for GPU)
 
-### Commande de lancement :
+### Launch command:
 
-Ouvrir PowerShell et lancer WSL :
+Open PowerShell and launch WSL:
 
 ```powershell
 wsl
 ```
 
-Puis dans WSL dans le dossier avec le start.sh:
+Then in WSL, navigate to the folder with start.sh:
 
-Par exemple :
+For example:
 ```bash
-cd /mnt/c/Users/VOTRE_USERNAME/Document/appr_renf
+cd /mnt/c/Users/YOUR_USERNAME/Document/appr_renf
 ./start.sh
 ```
 
-### Dossier partagé :
+### Shared folder:
 
 **Linux (WSL)** ↔️ **Docker**
 ```
-/home/VOTRE_USERNAME/rl/mujoco/workspace  ←→  /home/student/workspace
+/home/YOUR_USERNAME/rl/mujoco/workspace  ←→  /home/student/workspace
 ```
 
-### 💻 Éditer les fichiers depuis Windows :
+### Edit files from Windows:
 
 ```
-\\wsl.localhost\Ubuntu\home\VOTRE_USERNAME\rl\mujoco\workspace
+\\wsl.localhost\Ubuntu\home\YOUR_USERNAME\rl\mujoco\workspace
 ```
 
 
-### ✅ Avantages :
-- GPU CUDA fonctionnel (PyTorch/TensorFlow)
-- Jupyter fonctionne correctement
-- Meilleure détection GPU
-- Performance optimale pour l'entraînement
+### Advantages:
+- CUDA GPU functional (PyTorch/TensorFlow)
+- Jupyter works correctly
+- Better GPU detection
+- Optimal performance for training
 
-### Inconvénients :
-- Dossier différent du lancement Windows
-- Nécessite d'ouvrir WSL
+### Disadvantages:
+- Different folder from Windows launch
+- Requires opening WSL
 
-### 🌐 Accès :
+### Access:
 - Desktop: http://localhost:6080
 - Jupyter: http://localhost:8888
 
 ---
 
-## PARTIE 2 : Lancement direct depuis Windows
+## PART 2: Direct Launch from Windows
 
-### Commande de lancement :
+### Launch command:
 
-Double-cliquer sur `start.bat` ou dans PowerShell :
+Double-click `start.bat` or in PowerShell:
 
 ```powershell
-cd C:\Users\VOTRE_USERNAME\Documents\appr_renf
+cd C:\Users\YOUR_USERNAME\Documents\appr_renf
 .\start.bat
 ```
 
-### Dossier partagé :
+### Shared folder:
 
 **Windows** ↔️ **Docker**
 ```
-C:\Users\VOTRE_USERNAME\rl\mujoco\workspace  ←→  /home/student/workspace
+C:\Users\YOUR_USERNAME\rl\mujoco\workspace  ←→  /home/student/workspace
 ```
 
-### 💻 Éditer les fichiers depuis Windows :
+### Edit files from Windows:
 
-**VSCode directement :**
+**VSCode directly:**
 ```
-Ouvrir le dossier : C:\Users\VOTRE_USERNAME\rl\mujoco\workspace
-```
-
-**Explorateur Windows :**
-```
-C:\Users\VOTRE_USERNAME\rl\mujoco\workspace
+Open folder: C:\Users\YOUR_USERNAME\rl\mujoco\workspace
 ```
 
-### ✅ Avantages :
-- Simple, un double-clic sur start.bat
-- Dossier Windows natif (facile d'accès)
-- Pas besoin d'ouvrir WSL
+**Windows Explorer:**
+```
+C:\Users\YOUR_USERNAME\rl\mujoco\workspace
+```
 
-### Inconvénients :
-- GPU CUDA peut ne pas fonctionner (détection moins fiable)
-- Jupyter peut avoir des problèmes de permissions
-- Software rendering pour OpenGL
+### Advantages:
+- Simple, double-click on start.bat
+- Native Windows folder (easy access)
+- No need to open WSL
 
-### 🌐 Accès :
+### Disadvantages:
+- CUDA GPU may not work (less reliable detection)
+- Jupyter may have permission issues
+- Software rendering for OpenGL
+
+### Access:
 - Desktop: http://localhost:6080
-- Jupyter: http://localhost:8888 (peut ne pas démarrer)
+- Jupyter: http://localhost:8888 (may not start)
 
 ---
 
-## Comparaison rapide :
+## Quick Comparison:
 
-| Critère | WSL (start.sh) | Windows (start.bat) |
+| Criteria | WSL (start.sh) | Windows (start.bat) |
 |---------|----------------|---------------------|
-| GPU CUDA | ✅ Fonctionne | ❌ Peut échouer |
-| Jupyter | ✅ Fonctionne | ⚠️ Problèmes possibles |
-| Dossier partagé | `/home/USERNAME/...` | `C:\Users\USERNAME\...` |
-| Simplicité | ⚠️ Terminal WSL | ✅ Double-clic |
-| Performance | ✅ Optimale | ⚠️ Moyenne |
+| CUDA GPU | ✅ Works | ❌ May fail |
+| Jupyter | ✅ Works | ⚠️ Possible issues |
+| Shared folder | `/home/USERNAME/...` | `C:\Users\USERNAME\...` |
+| Simplicity | ⚠️ WSL Terminal | ✅ Double-click |
+| Performance | ✅ Optimal | ⚠️ Average |
 
 ---
 
 
-## Accès à l'environnement
+## Accessing the Environment
 
-Une fois lancé, ouvrir dans votre navigateur :
+Once launched, open in your browser:
 
-- **Desktop noVNC** : http://localhost:6080
-- **Jupyter Notebook** : http://localhost:8888
+- **Desktop noVNC**: http://localhost:6080
+- **Jupyter Notebook**: http://localhost:8888
 
 
-## Vérifier le support GPU
+## Verify GPU Support
 
-Dans Jupyter (http://localhost:8888), créer un nouveau notebook et tester :
+In Jupyter (http://localhost:8888), create a new notebook and test:
 
 ```python
 import torch
@@ -225,71 +225,71 @@ else:
     print("No GPU available")
 ```
 
-Résultat attendu :
+Expected result:
 ```
 Device: cuda:0
 GPU: NVIDIA GeForce RTX 4090
 CUDA Version: 1x.x
 ```
 
-## Arrêter l'environnement
+## Stop the Environment
 
-Dans le terminal où l'environnement tourne :
+In the terminal where the environment is running:
 
 ```
 Ctrl+C
 ```
 
-Le conteneur s'arrêtera proprement.
+The container will stop cleanly.
 
-## Options de lancement
+## Launch Options
 
-### Résolution personnalisée
+### Custom resolution
 
 ```bash
 ./start.sh --resolution 2560x1440
 ```
 
-### Mode économie de RAM
+### RAM saving mode
 
 ```bash
 ./start.sh --small_ram
 ```
 
-### RAM personnalisée
+### Custom RAM
 
 ```bash
 ./start.sh --ram 2g
 ```
 
-### Qualité d'affichage
+### Display quality
 
 ```bash
-./start.sh --quality medium  # ou low
+./start.sh --quality medium  # or low
 ```
 
-### Mode local (sans vérifier les mises à jour)
+### Local mode (without checking for updates)
 
 ```bash
 ./start.sh --local
 ```
 
-## Support CUDA vs OpenGL
+## CUDA vs OpenGL Support
 
-### ✅ CUDA (Calculs GPU)
+### CUDA (GPU Computing)
 - PyTorch, TensorFlow
-- Entraînement de réseaux de neurones
-- **Fonctionne avec ce setup**
+- Neural network training
+- **Works with this setup**
 
-### OpenGL (Affichage 3D)
-- Visualisation MuJoCo
+### OpenGL (3D Display)
+- MuJoCo visualization
 - Software rendering (CPU)
-- Légèrement plus lent mais fonctionnel
+- Slightly slower but functional
 
-**Note** : L'entraînement RL utilise principalement CUDA (rapide), l'affichage 3D est surtout pour la visualisation/debug.
+**Note**: RL training mainly uses CUDA (fast), 3D display is mostly for visualization/debugging.
 
-## Ressources
+## Resources
 
-- MuJoCo : https://mujoco.org/
-- Docker Desktop : https://www.docker.com/products/docker-desktop
-- WSL Documentation : https://docs.microsoft.com/windows/wsl/
+- MuJoCo: https://mujoco.org/
+- Docker Desktop: https://www.docker.com/products/docker-desktop
+- WSL Documentation: https://docs.microsoft.com/windows/wsl/
